@@ -8,9 +8,9 @@ use lumo_core::{EntryKind, list_entries};
 
 #[derive(Parser)]
 #[command(
-    name = "lumo",
+    name = "lumo-cli",
     version,
-    about = "Lumo File Explorer",
+    about = "Lumo File Explorer command-line tools",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -35,10 +35,10 @@ fn main() -> ExitCode {
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        // A closed pipe (e.g. `lumo ls | head`) is not an error worth reporting.
+        // A closed pipe (e.g. `lumo-cli ls | head`) is not an error worth reporting.
         Err(err) if is_broken_pipe(&err) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("lumo: {err:#}");
+            eprintln!("lumo-cli: {err:#}");
             ExitCode::FAILURE
         }
     }

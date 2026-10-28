@@ -1,0 +1,36 @@
+[package]
+name = "lumo-ui"
+description = "The Lumo file explorer window (egui)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "lumo"
+path = "src/main.rs"
+
+[dependencies]
+lumo-core.workspace = true
+lumo-platform.workspace = true
+chrono.workspace = true
+eframe = { workspace = true, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "persistence",
+    "system_fonts",
+    "wayland",
+    "x11",
+] }
+egui_extras.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["eframe"] }
+
+[lints]
+workspace = true

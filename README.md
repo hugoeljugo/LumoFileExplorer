@@ -3,8 +3,8 @@
 A fast, private, developer-friendly file manager written in Rust, targeting
 Windows 10/11 first and Linux next.
 
-> **Status:** early development (Phase 1 done). There is a streaming directory
-> scanner and the `lumo ls` CLI; the windowed UI is next.
+> **Status:** early development (Phase 2 done). A tabbed file-browsing window
+> and the `lumo-cli` tool work; Windows shell integration (Win+E) is next.
 > See [ROADMAP.md](ROADMAP.md) for the plan and [GOALS.md](GOALS.md) for targets.
 
 ## Building
@@ -13,11 +13,13 @@ Requirements: [rustup](https://rustup.rs). The toolchain version is pinned in
 `rust-toolchain.toml` and installs automatically on first build.
 
 On Windows you also need the MSVC build tools ("Desktop development with C++"
-workload from Visual Studio Build Tools).
+workload from Visual Studio Build Tools). On Linux, install the windowing
+headers: `libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev`.
 
 ```sh
-cargo build --release          # binary at target/release/lumo(.exe)
+cargo build --release          # binaries in target/release/
 cargo test --workspace --all-features    # run all tests
+cargo test --release -p lumo-ui --test perf_test   # UI timing gates
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo bench -p lumo-core --bench folder_load   # scan benchmarks
 ```
@@ -25,18 +27,38 @@ cargo bench -p lumo-core --bench folder_load   # scan benchmarks
 ## Usage
 
 ```sh
-lumo --version
-lumo ls [PATH]                 # list a directory (defaults to the current one)
+lumo                           # open the window, restoring the last session's tabs
+lumo PATH                      # open the window at PATH (one tab)
+lumo-cli --version
+lumo-cli ls [PATH]             # list a directory (defaults to the current one)
 ```
+
+Open tabs are saved on every change to `%APPDATA%\Lumo\data\session.json`
+(`~/.local/share/lumo` on Linux), so they survive crashes. Set `LUMO_DATA_DIR`
+to store state elsewhere.
+
+### Keyboard shortcuts
+
+| Keys | Action |
+|------|--------|
+| Ctrl+T / Ctrl+W | New tab / close tab |
+| Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+1…9 | Switch tabs |
+| Ctrl+N | New window |
+| Alt+Left / Alt+Right / Backspace, mouse back/forward | Back / forward |
+| Alt+Up | Parent folder |
+| Ctrl+L / Alt+D / F4 | Edit the address (Tab accepts a suggestion) |
+| F5 | Refresh |
+| Ctrl+H | Show hidden items |
+| Arrows, PageUp/PageDown, Home/End, typing | Select; Enter opens |
 
 ## Repository layout
 
 | Crate | Purpose |
 |-------|---------|
-| `crates/lumo-core` | Platform-agnostic filesystem logic |
-| `crates/lumo-cli`  | The `lumo` binary |
-
-Further crates (`lumo-platform`, `lumo-ui`) are added as their roadmap phases begin.
+| `crates/lumo-core`     | Platform-agnostic filesystem logic (streaming scanner) |
+| `crates/lumo-platform` | OS integration: drives, known folders, opening files |
+| `crates/lumo-ui`       | The egui window; builds the `lumo` binary |
+| `crates/lumo-cli`      | The `lumo-cli` command-line tool |
 
 ## License
 

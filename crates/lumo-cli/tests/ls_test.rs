@@ -4,10 +4,10 @@ use std::process::{Command, Output};
 
 #[allow(clippy::expect_used)] // test helper, not a #[test] fn, so clippy.toml doesn't cover it
 fn lumo(args: &[&std::ffi::OsStr]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_lumo"))
+    Command::new(env!("CARGO_BIN_EXE_lumo-cli"))
         .args(args)
         .output()
-        .expect("failed to run lumo binary")
+        .expect("failed to run lumo-cli binary")
 }
 
 #[test]
@@ -16,7 +16,10 @@ fn version_prints_crate_version() {
 
     assert!(out.status.success());
     let stdout = String::from_utf8(out.stdout).unwrap();
-    assert_eq!(stdout.trim(), format!("lumo {}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(
+        stdout.trim(),
+        format!("lumo-cli {}", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
@@ -45,7 +48,7 @@ fn ls_missing_path_fails_with_message() {
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(
-        stderr.starts_with("lumo: path not found:"),
+        stderr.starts_with("lumo-cli: path not found:"),
         "stderr: {stderr}"
     );
 }
@@ -56,5 +59,5 @@ fn no_arguments_prints_help() {
 
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("Usage: lumo"), "stderr: {stderr}");
+    assert!(stderr.contains("Usage: lumo-cli"), "stderr: {stderr}");
 }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/lumo-core", "crates/lumo-cli"]
+members = ["crates/lumo-core", "crates/lumo-cli", "crates/lumo-platform", "crates/lumo-ui"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,13 +11,23 @@ authors = ["The Lumo File Explorer contributors"]
 
 [workspace.dependencies]
 lumo-core = { path = "crates/lumo-core" }
+lumo-platform = { path = "crates/lumo-platform" }
 anyhow = "1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
 criterion = "0.8"
+dirs = "7"
+eframe = { version = "0.37", default-features = false }
+egui_extras = { version = "0.37", default-features = false }
+egui_kittest = "0.37"
+open = "5.4"
 rayon = "1.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1.54", default-features = false }
+windows-sys = "0.61"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

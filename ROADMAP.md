@@ -10,7 +10,7 @@
 
 ### Deliverables
 - [x] Cargo workspace with one crate per layer (`lumo-core`, `lumo-cli`; `lumo-platform`, `lumo-ui` added later)
-- [x] Minimal CLI that lists directory contents (`lumo ls`)
+- [x] Minimal CLI that lists directory contents (`lumo ls`; renamed `lumo-cli ls` in Phase 2 when `lumo` became the GUI)
 - [x] Native build targets x86_64-pc-windows-msvc and x86_64-unknown-linux-gnu (built by CI)
 - [x] CI pipeline (GitHub Actions) running fmt, clippy, tests on Windows + Linux
 - [x] `README.md` with build instructions
@@ -20,14 +20,14 @@
 None
 
 ### Mandatory Tests
-- [x] `cargo build --release` succeeds on Windows (Linux: verified by CI once pushed)
+- [x] `cargo build --release` succeeds on Windows and Linux (CI)
 - [x] `cargo test` passes all unit tests
 - [x] Binary executes and outputs version number
-- [ ] CI matrix passes (windows-2022, windows-2025, ubuntu-22.04) — needs a GitHub remote. GitHub no longer offers Windows 10 runners, so Windows 10 is tested manually.
+- [x] CI matrix passes (windows-2022, windows-2025, ubuntu-22.04). GitHub no longer offers Windows 10 runners, so Windows 10 is tested manually.
 
 ### Success Criteria
 ```bash
-cargo run --bin lumo -- ls /some/path
+cargo run --bin lumo-cli -- ls /some/path
 # Outputs one entry per line (directories first, with trailing separator) without panic
 ```
 
@@ -79,23 +79,37 @@ while let Some(entry) = stream.next().await {
 **Goal:** Functional windowed interface with tabs and navigation
 
 ### Deliverables
-- [ ] egui (eframe) UI, shared by all platforms
-- [ ] Tabbed browsing (multiple folders)
-- [ ] Address bar with path history
-- [ ] Back/Forward navigation stack
-- [ ] Sidebar with quick access folders
-- [ ] Keyboard shortcuts (Ctrl+W, Alt+Left, Ctrl+Tab)
-- [ ] `lumo [PATH]` opens a window at PATH (needed by Phase 3 shell hooks)
+- [x] egui (eframe 0.37, glow renderer) UI, shared by all platforms; Explorer-style details list with sortable Name / Date modified / Type / Size columns
+- [x] Tabbed browsing (multiple folders), lazy-loaded so restoring many tabs is cheap
+- [x] Address bar: clickable breadcrumbs → text field with autocompletion (recent locations + subfolders)
+- [x] Back/Forward navigation stack (per tab); going up re-selects the folder you came from
+- [x] Sidebar with quick access folders (OS known folders) and drives
+- [x] Keyboard shortcuts (Ctrl+W, Alt+Left, Ctrl+Tab, and more — see README)
+- [x] `lumo [PATH]` opens a window at PATH (needed by Phase 3 shell hooks); CLI moved to `lumo-cli`
+- [x] Hidden-items toggle, type-ahead selection, opening files with their default app
 
 ### Dependencies
 Phase 1
 
 ### Mandatory Tests
-- [ ] Open 50 tabs without memory leak (<500MB total)
-- [ ] Tab switch latency <50ms
-- [ ] Address bar autocomplete works
-- [ ] Window resize maintains 60fps rendering
-- [ ] Crash recovery restores tabs after force-close
+- [x] Open 50 tabs without memory leak (<500MB total) — `tests/tabs_memory_test.rs` (3 open/close cycles of 50 tabs; asserts no growth between cycles)
+- [x] Tab switch latency <50ms — `tests/perf_test.rs` (release)
+- [x] Address bar autocomplete works — `tests/app_test.rs::address_bar_autocompletes`
+- [x] Window resize maintains 60fps rendering — `tests/perf_test.rs` (CPU frame time, release)
+- [x] Crash recovery restores tabs after force-close — session is saved atomically on every change; `tests/app_test.rs::session_survives_force_close`, plus a manual kill-and-relaunch of the release binary
+
+### Results (Windows 11, release build)
+| Measurement | Result |
+|-------------|--------|
+| Window visible after launch (warm / first) | ~450 ms / ~860 ms |
+| Private memory, idle, one tab | ~75 MB (GOALS target <50 MB — Phase 10) |
+| Worst tab switch, ten 10K-entry tabs | 7.1 ms |
+| p95 CPU frame time while resizing a 10K-entry folder | 1.07 ms |
+| Renderer: wgpu (rejected) | ~1.1 s to window, ~370 MB private |
+
+Found by the 50-tab test: egui keeps per-row state for every table id it ever sees, so a table id per tab leaked ~90 KB per closed tab. Fixed by sharing one table and saving each tab's scroll offset ourselves.
+
+Known limitation: every window saves the session, so with several windows open the last one to change wins. Single-instance handling comes with Phase 3.
 
 ### Success Criteria
 ```
@@ -429,7 +443,7 @@ Each phase must demonstrate **measurable improvement** over previous state:
 |-------|-----------------|----------|--------|
 | 0 | Build time | N/A | <30s |
 | 1 | Scan 10K files | 5.9ms (std::fs, measured) | <2s ✅ 7.7ms |
-| 2 | Tab switch | N/A | <50ms |
+| 2 | Tab switch | N/A | <50ms ✅ 7.1ms |
 | 3 | Win+E redirect | Explorer launches | Lumo launches |
 | 4 | Linux launch | N/A | <1s |
 | 5 | Search 10K files | N/A | <100ms |

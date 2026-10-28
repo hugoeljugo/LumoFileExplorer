@@ -6,12 +6,12 @@ mod provider;
 
 use std::path::Path;
 
-pub use entry::{Entry, EntryKind, sort_entries};
+pub use entry::{Entry, EntryKind, natural_cmp, sort_entries};
 pub use error::FsError;
 pub use provider::{EntryIter, FileSystemProvider, LocalFs};
 
 /// Lists the immediate children of `path` on the local disk: directories
-/// first, then by case-insensitive name.
+/// first, then by name in natural order.
 pub fn list_entries(path: &Path) -> Result<Vec<Entry>, FsError> {
     LocalFs.list_entries(path)
 }
@@ -86,5 +86,35 @@ mod tests {
         let err = list_entries(&file).unwrap_err();
 
         assert!(matches!(err, FsError::NotADirectory(p) if p == file));
+    }
+
+    #[test]
+    fn reports_hidden_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        File::create(dir.path().join("visible.txt")).unwrap();
+        let hidden = if cfg!(windows) {
+            "secret.txt"
+        } else {
+            ".secret"
+        };
+        File::create(dir.path().join(hidden)).unwrap();
+        #[cfg(windows)]
+        assert!(
+            std::process::Command::new("attrib")
+                .arg("+h")
+                .arg(dir.path().join(hidden))
+                .status()
+                .unwrap()
+                .success()
+        );
+
+        let entries = list_entries(dir.path()).unwrap();
+        let hidden_names: Vec<_> = entries
+            .iter()
+            .filter(|e| e.hidden)
+            .map(|e| &e.name)
+            .collect();
+
+        assert_eq!(hidden_names, [hidden]);
     }
 }

@@ -36,9 +36,9 @@ crates/
 │       ├── fs/     # File/Folder abstractions, FsError
 │       ├── scan/   # Directory traversal workers (Phase 1)
 │       └── index/  # Search indexing (Phase 5)
-├── lumo-cli/       # The `lumo` binary (CLI; later also launches the UI)
-├── lumo-ui/        # egui app (Phase 2)
-├── lumo-platform/  # OS integration (Phase 3+)
+├── lumo-cli/       # The `lumo-cli` binary (command-line tools)
+├── lumo-ui/        # egui app; builds the `lumo` GUI binary
+├── lumo-platform/  # OS integration: drives, known folders, open files; shell hooks in Phase 3
 │   └── src/{win32,unix}/  # registry/shell hooks; desktop files, MIME
 └── lumo-features/  # ai/, git/, terminal/ (split into crates if they grow)
 ```
@@ -107,6 +107,14 @@ pub trait FileSystemProvider: Send + Sync {
 - **Stream directory scans** — Never load 100K entries into memory
 - **Lazy thumbnail generation** — Generate on-demand, cache to disk
 - **Worker thread pools** — Limit concurrent I/O to prevent saturation
+
+### UI (egui) Rules Learned the Hard Way
+- **Never give egui a fresh widget id per transient thing** (tab, folder, file). egui keeps state for every id it has seen, forever; a table id per tab leaked ~90 KB per closed tab. Share one id and store per-item state (scroll offset, etc.) in our own structs.
+- **No icon glyphs from fonts** — draw icons in `lumo-ui/src/icons.rs`. Fonts differ per machine (Linux has no Segoe UI), and egui_kittest fails tests on any missing glyph.
+- **Views push `Action`s; `LumoApp::apply` mutates state** after drawing. Keep that split so behavior stays testable.
+- **UI tests use egui_kittest** (`crates/lumo-ui/tests/`). Simulate Ctrl as `common::CTRL` (ctrl + command), like winit does on Windows; plain `Modifiers::CTRL` misses text-edit shortcuts such as Ctrl+A.
+- **Anything slow runs off the UI thread** (folder loading uses a worker + bounded channel). Known exception: address-bar autocompletion lists one folder synchronously.
+- **Renderer is glow (OpenGL)**: measured ~0.5 s / ~75 MB vs wgpu's ~1.1 s / ~370 MB. Re-measure before switching.
 
 ---
 
