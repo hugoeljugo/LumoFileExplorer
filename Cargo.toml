@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/lumo-core", "crates/lumo-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+authors = ["The Lumo File Explorer contributors"]
+
+[workspace.dependencies]
+lumo-core = { path = "crates/lumo-core" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tempfile = "3"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+# CLAUDE.md: no unwrap()/expect() in production paths (allowed in tests via clippy.toml).
+unwrap_used = "deny"
+expect_used = "deny"
+dbg_macro = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
