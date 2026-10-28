@@ -12,8 +12,8 @@
 - **Cross-Platform:** Windows 10/11 first; Linux (Wayland/X11) deferred to Phase 4
 - **UI Toolkit:** egui (eframe) on every platform — one UI codebase; only OS integration differs
 - **License:** MIT, open source
-- **Async Runtime:** tokio
-- **Parallel Processing:** rayon
+- **Async Runtime:** tokio — optional `tokio` feature of `lumo-core`; the core scanner itself is blocking and runtime-free (tokio file I/O is just `spawn_blocking` anyway)
+- **Parallel Processing:** rayon — measure before using: on Windows, per-entry metadata is free, so parallelizing it is slower
 - **File System Access:** `windows-sys` (Windows), `nix` + `gio` (Linux)
 
 ### Design Principles

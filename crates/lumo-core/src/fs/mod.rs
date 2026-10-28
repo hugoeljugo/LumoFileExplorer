@@ -1,84 +1,25 @@
 //! File and folder abstractions.
 
+mod entry;
 mod error;
+mod provider;
 
-use std::ffi::OsString;
-use std::fs::{self, FileType};
 use std::path::Path;
 
+pub use entry::{Entry, EntryKind, sort_entries};
 pub use error::FsError;
+pub use provider::{EntryIter, FileSystemProvider, LocalFs};
 
-/// What kind of filesystem object an [`Entry`] is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum EntryKind {
-    Directory,
-    File,
-    Symlink,
-    Other,
-}
-
-impl From<FileType> for EntryKind {
-    fn from(file_type: FileType) -> Self {
-        if file_type.is_symlink() {
-            Self::Symlink
-        } else if file_type.is_dir() {
-            Self::Directory
-        } else if file_type.is_file() {
-            Self::File
-        } else {
-            Self::Other
-        }
-    }
-}
-
-/// A single child of a directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    /// File name only (no parent path). Not guaranteed to be valid UTF-8.
-    pub name: OsString,
-    pub kind: EntryKind,
-}
-
-/// Lists the immediate children of `path`: directories first, then by
-/// case-insensitive name.
+/// Lists the immediate children of `path` on the local disk: directories
+/// first, then by case-insensitive name.
 pub fn list_entries(path: &Path) -> Result<Vec<Entry>, FsError> {
-    let read_dir = fs::read_dir(path).map_err(|err| classify_read_dir_error(path, err))?;
-
-    let mut entries = read_dir
-        .map(|dir_entry| {
-            let dir_entry = dir_entry.map_err(|err| FsError::from_io(path, err))?;
-            let file_type = dir_entry
-                .file_type()
-                .map_err(|err| FsError::from_io(&dir_entry.path(), err))?;
-            Ok(Entry {
-                name: dir_entry.file_name(),
-                kind: file_type.into(),
-            })
-        })
-        .collect::<Result<Vec<_>, FsError>>()?;
-
-    entries.sort_by_cached_key(|entry| {
-        (
-            entry.kind != EntryKind::Directory,
-            entry.name.to_string_lossy().to_lowercase(),
-        )
-    });
-    Ok(entries)
-}
-
-/// Some platforms report reading a file as a directory with a generic error
-/// code, so fall back to checking what the path actually is.
-fn classify_read_dir_error(path: &Path, err: std::io::Error) -> FsError {
-    match FsError::from_io(path, err) {
-        FsError::Io { .. } if path.is_file() => FsError::NotADirectory(path.to_path_buf()),
-        other => other,
-    }
+    LocalFs.list_entries(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::{File, create_dir};
+    use std::fs::{File, create_dir, write};
 
     fn names(entries: &[Entry]) -> Vec<String> {
         entries
@@ -94,26 +35,18 @@ mod tests {
     }
 
     #[test]
-    fn reports_files_and_directories() {
+    fn reports_kind_size_and_mtime() {
         let dir = tempfile::tempdir().unwrap();
-        File::create(dir.path().join("a.txt")).unwrap();
+        write(dir.path().join("a.txt"), b"hello").unwrap();
         create_dir(dir.path().join("sub")).unwrap();
 
         let entries = list_entries(dir.path()).unwrap();
 
-        assert_eq!(
-            entries,
-            vec![
-                Entry {
-                    name: "sub".into(),
-                    kind: EntryKind::Directory
-                },
-                Entry {
-                    name: "a.txt".into(),
-                    kind: EntryKind::File
-                },
-            ]
-        );
+        assert_eq!(names(&entries), ["sub", "a.txt"]);
+        let (sub, file) = (&entries[0], &entries[1]);
+        assert_eq!((sub.kind, sub.size), (EntryKind::Directory, 0));
+        assert_eq!((file.kind, file.size), (EntryKind::File, 5));
+        assert!(file.modified.is_some());
     }
 
     #[test]

@@ -3,7 +3,8 @@
 A fast, private, developer-friendly file manager written in Rust, targeting
 Windows 10/11 first and Linux next.
 
-> **Status:** early development (Phase 0). Only the `lumo ls` CLI exists so far.
+> **Status:** early development (Phase 1 done). There is a streaming directory
+> scanner and the `lumo ls` CLI; the windowed UI is next.
 > See [ROADMAP.md](ROADMAP.md) for the plan and [GOALS.md](GOALS.md) for targets.
 
 ## Building
@@ -16,8 +17,9 @@ workload from Visual Studio Build Tools).
 
 ```sh
 cargo build --release          # binary at target/release/lumo(.exe)
-cargo test --workspace         # run all tests
-cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-features    # run all tests
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo bench -p lumo-core --bench folder_load   # scan benchmarks
 ```
 
 ## Usage
