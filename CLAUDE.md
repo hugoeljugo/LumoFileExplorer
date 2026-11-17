@@ -115,6 +115,7 @@ pub trait FileSystemProvider: Send + Sync {
 - **Bundled fonts (IBM Plex Sans, Lilex) must stay unmodified** — they are SIL OFL 1.1 and "Plex" is a Reserved Font Name; renaming or editing the files would break the license. Ship the license files with every distribution.
 - **No icon glyphs from fonts** — draw icons in `lumo-ui/src/icons.rs`. Fonts differ per machine (Linux has no Segoe UI), and egui_kittest fails tests on any missing glyph.
 - **Views push `Action`s; `LumoApp::apply` mutates state** after drawing. Keep that split so behavior stays testable.
+- **Every user-facing feature gets command-palette entries** (`LumoApp::palette_items`), with its shortcut if it has one. The palette is how Lumo grows (Git, AI, archives, editor…).
 - **UI tests use egui_kittest** (`crates/lumo-ui/tests/`). Simulate Ctrl as `common::CTRL` (ctrl + command), like winit does on Windows; plain `Modifiers::CTRL` misses text-edit shortcuts such as Ctrl+A.
 - **Anything slow runs off the UI thread** (folder loading uses a worker + bounded channel). Known exception: address-bar autocompletion lists one folder synchronously.
 - **Renderer is glow (OpenGL)**: measured ~0.5 s / ~75 MB vs wgpu's ~1.1 s / ~370 MB. Re-measure before switching.

@@ -395,3 +395,99 @@ fn tabs_keep_their_own_scroll_position() {
     settle(&mut h);
     assert_eq!(h.state().tabs()[0].scroll_offset(), scrolled);
 }
+
+/// Opens the palette and types `query`.
+fn palette_query(h: &mut egui_kittest::Harness<'_, lumo_ui::LumoApp>, query: &str) {
+    h.key_press_modifiers(CTRL, Key::K);
+    h.run();
+    assert!(h.state().is_palette_open());
+    h.event(Event::Text(query.into()));
+    h.run();
+}
+
+#[test]
+fn palette_runs_commands() {
+    let dir = tree(&["a/"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+
+    palette_query(&mut h, "new tab");
+    h.key_press(Key::Enter);
+    settle(&mut h);
+
+    assert!(!h.state().is_palette_open());
+    assert_eq!(h.state().tabs().len(), 2);
+}
+
+#[test]
+fn palette_fuzzy_opens_folders_and_reveals_files() {
+    let dir = tree(&["beta-project/", "alpha.txt", "zeta.txt"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+
+    palette_query(&mut h, "zeta");
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(selected_name(&h).as_deref(), Some("zeta.txt"));
+    assert_eq!(
+        active_path(&h),
+        dir.path(),
+        "files are revealed, not opened"
+    );
+
+    palette_query(&mut h, "bp");
+    h.key_press(Key::Enter);
+    settle(&mut h);
+    assert_eq!(active_path(&h), dir.path().join("beta-project"));
+}
+
+#[test]
+fn palette_commands_only_prefix() {
+    let dir = tree(&["hidden-notes.txt"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+
+    palette_query(&mut h, ">hidden");
+    h.key_press(Key::Enter);
+    h.run();
+
+    assert!(h.state().show_hidden(), "ran the command, not the file");
+}
+
+#[test]
+fn palette_switches_tabs() {
+    let dir = tree(&["quokka/", "other/"]);
+    let mut h = harness(at(&dir.path().join("quokka")));
+    settle(&mut h);
+    h.state_mut()
+        .queue(Action::OpenInNewTab(dir.path().join("other")));
+    settle(&mut h);
+    assert_eq!(h.state().active_index(), 1);
+
+    palette_query(&mut h, "quokka");
+    h.key_press(Key::Enter);
+    settle(&mut h);
+
+    assert_eq!(h.state().active_index(), 0);
+    assert_eq!(h.state().tabs().len(), 2, "switched, didn't open a new tab");
+}
+
+#[test]
+fn palette_escape_and_toggle_close_without_acting() {
+    let dir = tree(&["a/"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+
+    palette_query(&mut h, "new tab");
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().is_palette_open());
+
+    h.get_by_label("Command palette").click();
+    h.run();
+    assert!(h.state().is_palette_open());
+    h.key_press_modifiers(CTRL, Key::K);
+    h.run();
+    assert!(!h.state().is_palette_open());
+    assert_eq!(h.state().tabs().len(), 1);
+}

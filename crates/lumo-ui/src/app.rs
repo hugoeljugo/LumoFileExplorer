@@ -3,12 +3,16 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Context, Event, Key, KeyboardShortcut, Modifiers, PointerButton};
+use eframe::egui::{
+    self, Context, Event, Key, KeyboardShortcut, Modifiers, PointerButton, ThemePreference,
+};
 use lumo_core::EntryKind;
 use lumo_platform::KnownFolder;
 
 use crate::address::AddressBar;
+use crate::icons::{self, FileKind, Icon};
 use crate::listing::SortColumn;
+use crate::palette::{CommandPalette, ItemKind, PaletteItem};
 use crate::session::Session;
 use crate::tab::{Move, Tab};
 
@@ -60,6 +64,22 @@ pub enum Action {
     Sort(SortColumn),
     ToggleHidden,
     EditAddress,
+    /// Select the row at this index and scroll it into view.
+    Reveal(usize),
+    OpenPalette,
+    SetTheme(ThemePreference),
+}
+
+/// What the command palette's item list was built from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaletteKey {
+    tab: u64,
+    folder: PathBuf,
+    rows: usize,
+    tabs: usize,
+    active: usize,
+    show_hidden: bool,
+    recent: usize,
 }
 
 pub struct LumoApp {
@@ -67,6 +87,7 @@ pub struct LumoApp {
     pub(crate) active: usize,
     pub(crate) show_hidden: bool,
     pub(crate) address: AddressBar,
+    pub(crate) palette: CommandPalette,
     pub(crate) recent: Vec<PathBuf>,
     pub(crate) quick_access: Vec<KnownFolder>,
     pub(crate) drives: Vec<PathBuf>,
@@ -80,6 +101,8 @@ pub struct LumoApp {
     title: String,
     /// The (tab id, folder) the shared file table showed last frame.
     pub(crate) table_shown_for: Option<(u64, PathBuf)>,
+    /// Palette items, rebuilt only when what they list changes.
+    pub(crate) palette_cache: Option<(PaletteKey, Vec<PaletteItem>)>,
     ctx: Context,
 }
 
@@ -122,6 +145,7 @@ impl LumoApp {
             active,
             show_hidden: false,
             address: AddressBar::default(),
+            palette: CommandPalette::default(),
             quick_access: lumo_platform::known_folders(),
             drives: lumo_platform::drives(),
             status: None,
@@ -132,6 +156,7 @@ impl LumoApp {
             type_ahead_at: 0.0,
             title: String::new(),
             table_shown_for: None,
+            palette_cache: None,
             ctx: cc.egui_ctx.clone(),
         }
     }
@@ -160,6 +185,10 @@ impl LumoApp {
 
     pub fn is_editing_address(&self) -> bool {
         self.address.is_editing()
+    }
+
+    pub fn is_palette_open(&self) -> bool {
+        self.palette.is_open()
     }
 
     /// True once the active tab has finished loading.
@@ -200,7 +229,18 @@ impl LumoApp {
         let mut typed = String::new();
         let now = ctx.input(|i| i.time);
 
+        let palette_open = self.palette.is_open();
         ctx.input_mut(|i| {
+            let palette_key = i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::K))
+                || i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::P));
+            if palette_key {
+                actions.push(Action::OpenPalette); // toggles
+            }
+            // While the palette is open it owns the keyboard: it handles
+            // Escape, arrows and Enter itself.
+            if palette_open {
+                return;
+            }
             if i.pointer.button_pressed(PointerButton::Extra1) {
                 actions.push(Action::Back);
             }
@@ -396,7 +436,188 @@ impl LumoApp {
                 let current = self.active_tab().path().to_path_buf();
                 self.address.start_editing(&current);
             }
+            Action::Reveal(row) => self.active_tab_mut().reveal(row),
+            Action::OpenPalette => {
+                if self.palette.is_open() {
+                    self.palette.close();
+                } else {
+                    self.palette.open();
+                }
+            }
+            Action::SetTheme(preference) => self.ctx.set_theme(preference),
         }
+    }
+
+    /// Identifies what [`Self::palette_items`] depends on.
+    pub(crate) fn palette_key(&self) -> PaletteKey {
+        let tab = self.active_tab();
+        PaletteKey {
+            tab: tab.id(),
+            folder: tab.path().to_path_buf(),
+            rows: tab.listing().map_or(0, |l| l.view().len()),
+            tabs: self.tabs.len(),
+            active: self.active,
+            show_hidden: self.show_hidden,
+            recent: self.recent.len(),
+        }
+    }
+
+    /// Everything the command palette can offer right now, in a stable order
+    /// (commands, other tabs, places, recent locations, current folder).
+    pub(crate) fn palette_items(&self) -> Vec<PaletteItem> {
+        let command = |title: &str, icon, shortcut, action| PaletteItem {
+            title: title.to_owned(),
+            detail: String::new(),
+            icon,
+            shortcut,
+            kind: ItemKind::Command,
+            action,
+        };
+        let hidden = if self.show_hidden {
+            "Hide hidden items"
+        } else {
+            "Show hidden items"
+        };
+        let mut items = vec![
+            command("New tab", Icon::Plus, Some("Ctrl+T"), Action::NewTab),
+            command(
+                "Close tab",
+                Icon::Close,
+                Some("Ctrl+W"),
+                Action::CloseTab(self.active),
+            ),
+            command("New window", Icon::Plus, Some("Ctrl+N"), Action::NewWindow),
+            command("Go back", Icon::ArrowLeft, Some("Alt+Left"), Action::Back),
+            command(
+                "Go forward",
+                Icon::ArrowRight,
+                Some("Alt+Right"),
+                Action::Forward,
+            ),
+            command("Go up a folder", Icon::ArrowUp, Some("Alt+Up"), Action::Up),
+            command("Refresh", Icon::Refresh, Some("F5"), Action::Refresh),
+            command(hidden, Icon::Eye, Some("Ctrl+H"), Action::ToggleHidden),
+            command(
+                "Edit address",
+                Icon::ChevronRight,
+                Some("Ctrl+L"),
+                Action::EditAddress,
+            ),
+            command(
+                "Sort by name",
+                Icon::SortDown,
+                None,
+                Action::Sort(SortColumn::Name),
+            ),
+            command(
+                "Sort by date modified",
+                Icon::SortDown,
+                None,
+                Action::Sort(SortColumn::Modified),
+            ),
+            command(
+                "Sort by type",
+                Icon::SortDown,
+                None,
+                Action::Sort(SortColumn::Type),
+            ),
+            command(
+                "Sort by size",
+                Icon::SortDown,
+                None,
+                Action::Sort(SortColumn::Size),
+            ),
+            command(
+                "Theme: dark",
+                Icon::Theme,
+                None,
+                Action::SetTheme(ThemePreference::Dark),
+            ),
+            command(
+                "Theme: light",
+                Icon::Theme,
+                None,
+                Action::SetTheme(ThemePreference::Light),
+            ),
+            command(
+                "Theme: follow system",
+                Icon::Theme,
+                None,
+                Action::SetTheme(ThemePreference::System),
+            ),
+        ];
+
+        let place = |title: String, path: &Path, icon, kind| PaletteItem {
+            title,
+            detail: path.display().to_string(),
+            icon,
+            shortcut: None,
+            kind,
+            action: Action::Navigate(path.to_path_buf()),
+        };
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if i != self.active {
+                items.push(PaletteItem {
+                    title: tab.title(),
+                    detail: format!("Tab · {}", tab.path().display()),
+                    icon: Icon::Folder,
+                    shortcut: None,
+                    kind: ItemKind::Tab,
+                    action: Action::ActivateTab(i),
+                });
+            }
+        }
+        for folder in &self.quick_access {
+            let icon = icons::place_icon(folder.label);
+            items.push(place(
+                folder.label.to_owned(),
+                &folder.path,
+                icon,
+                ItemKind::Place,
+            ));
+        }
+        for drive in &self.drives {
+            items.push(place(
+                drive.display().to_string(),
+                drive,
+                Icon::Drive,
+                ItemKind::Place,
+            ));
+        }
+        let current = self.active_tab().path();
+        for path in &self.recent {
+            let known = self.quick_access.iter().any(|f| f.path == *path);
+            if path != current && !known {
+                let title = crate::tab::title_for(path);
+                items.push(place(title, path, Icon::Folder, ItemKind::Recent));
+            }
+        }
+
+        if let Some(listing) = self.active_tab().listing() {
+            for &row_index in listing.view() {
+                let row = &listing.rows()[row_index];
+                let (icon, action) = match row.entry.kind {
+                    EntryKind::Directory => (
+                        Icon::Folder,
+                        Action::Navigate(current.join(&row.entry.name)),
+                    ),
+                    EntryKind::Symlink => (Icon::Link, Action::Reveal(row_index)),
+                    EntryKind::File | EntryKind::Other => (
+                        Icon::File(FileKind::from_name(&row.name)),
+                        Action::Reveal(row_index),
+                    ),
+                };
+                items.push(PaletteItem {
+                    title: row.name.clone(),
+                    detail: "in this folder".to_owned(),
+                    icon,
+                    shortcut: None,
+                    kind: ItemKind::Entry,
+                    action,
+                });
+            }
+        }
+        items
     }
 
     fn close_tab(&mut self, index: usize) {

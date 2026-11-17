@@ -42,6 +42,7 @@ to store state elsewhere. Lumo follows the system light/dark setting;
 
 | Keys | Action |
 |------|--------|
+| Ctrl+K or Ctrl+P | Command palette: fuzzy-search commands, tabs, places and files in this folder (`>` for commands only) |
 | Ctrl+T / Ctrl+W | New tab / close tab |
 | Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+1…9 | Switch tabs |
 | Ctrl+N | New window |

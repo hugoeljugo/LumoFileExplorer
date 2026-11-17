@@ -189,6 +189,12 @@ impl Tab {
         self.selected = row;
     }
 
+    /// Selects `row` and scrolls the table to it.
+    pub fn reveal(&mut self, row: usize) {
+        self.selected = Some(row);
+        self.scroll_to_selected = true;
+    }
+
     pub fn scroll_offset(&self) -> f32 {
         self.scroll_offset
     }

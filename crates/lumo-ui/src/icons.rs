@@ -29,6 +29,8 @@ pub enum Icon {
     SortDown,
     Eye,
     EyeOff,
+    Search,
+    Theme,
     // Line icons: places.
     Home,
     Desktop,
@@ -148,6 +150,16 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             if icon == Icon::EyeOff {
                 g.line((2.5, 2.5), (13.5, 13.5));
             }
+        }
+        Icon::Search => {
+            g.circle((7.0, 7.0), 4.5);
+            g.line((10.3, 10.3), (14.0, 14.0));
+        }
+        Icon::Theme => {
+            // Half-filled circle: light and dark.
+            g.circle((8.0, 8.0), 5.5);
+            let half = g.arc((8.0, 8.0), 5.5, -FRAC_PI_2, FRAC_PI_2);
+            painter.add(Shape::convex_polygon(half, color, Stroke::NONE));
         }
         Icon::Home => {
             g.polyline_at(&[(2.0, 8.0), (8.0, 2.5), (14.0, 8.0)]);
@@ -505,6 +517,20 @@ pub fn button(
         paint(ui.painter(), icon_rect, icon, color);
     }
     response
+}
+
+/// Icon for a "Quick access" place, by its label.
+pub fn place_icon(label: &str) -> Icon {
+    match label {
+        "Home" => Icon::Home,
+        "Desktop" => Icon::Desktop,
+        "Documents" => Icon::Documents,
+        "Downloads" => Icon::Downloads,
+        "Pictures" => Icon::Pictures,
+        "Music" => Icon::Music,
+        "Videos" => Icon::Videos,
+        _ => Icon::Folder,
+    }
 }
 
 /// Paints a 16×16 icon inline at the cursor.

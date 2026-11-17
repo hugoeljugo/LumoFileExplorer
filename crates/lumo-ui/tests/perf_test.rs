@@ -64,3 +64,26 @@ fn frames_fit_60fps_while_resizing_a_10k_entry_folder() {
         "p95 frame time {p95:?} exceeds 60fps budget"
     );
 }
+
+#[test]
+#[cfg_attr(debug_assertions, ignore = "timing gate: run with --release")]
+fn palette_keystrokes_fit_a_frame_in_a_10k_entry_folder() {
+    let dir = many_files(10_000);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+    h.key_press_modifiers(CTRL, Key::K);
+    h.run();
+
+    let mut worst = Duration::ZERO;
+    for text in ["f", "i", "l", "e", "0", "9", "9"] {
+        let started = Instant::now();
+        h.event(eframe::egui::Event::Text(text.into()));
+        h.step();
+        worst = worst.max(started.elapsed());
+    }
+
+    assert!(
+        worst < FRAME_BUDGET,
+        "worst palette keystroke frame took {worst:?}"
+    );
+}

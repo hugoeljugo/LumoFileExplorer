@@ -107,7 +107,7 @@ Features that significantly improve productivity. Should be present at launch.
 | PDF Preview | Render first page | <2s |
 | Media Playback | MP4, MP3, AVI in preview | 60fps |
 | Thumbnail Cache | Disk-persistent thumbnails | Auto-evict |
-| Quick Look | Press Space for preview | <50ms trigger |
+| Quick Look / Quick Peek | Press Space for a floating preview of the selected file | <50ms trigger |
 
 ### 7. Developer Tools
 | Feature | Description | Target |
@@ -117,6 +117,7 @@ Features that significantly improve productivity. Should be present at launch.
 | Git Diff | Side-by-side file comparison | <2s for 10MB |
 | Git History | Log viewer per file | Standard |
 | Syntax Previews | Colorized code without IDE | 20+ languages |
+| Simple Text Editor | Open, edit and save text/code files in-app (syntax highlighting, find, undo) — not an IDE | Instant open |
 | File Watcher | Detect changes externally | Real-time |
 | SSH/SFTP Mount | Remote folders as local | <5s connect |
 | Docker Container Access | Browse container filesystems | Standard |
@@ -129,6 +130,7 @@ Features that significantly improve productivity. Should be present at launch.
 | Copy Queue | Manage multiple transfers | Pause/resume |
 | Sync Folders | Mirror directories | <2min for 5K files |
 | Extract Archives | ZIP, RAR, 7Z, TAR | Native speeds |
+| Space-Saving Extraction | Extract with [HatchZip](https://sourceforge.net/mirror/hatchzip/), freeing the archive's space as it goes — for huge archives on full disks | Optional extract mode |
 | Compress Files | Create archives | Native speeds |
 | Checksum Calc | MD5, SHA256, CRC32 | Concurrent |
 
@@ -138,7 +140,8 @@ Features that significantly improve productivity. Should be present at launch.
 | Light/Dark Themes | System-aware toggles | Instant switch |
 | Custom Themes | Edit colors/layouts | JSON config |
 | Keyboard Shortcuts | Customizable bindings | Full remap |
-| Command Palette | Quick action search (Ctrl+P) | <100ms |
+| Command Palette | Fuzzy search over commands, tabs, places, files (Ctrl+K / Ctrl+P); every new feature (Git, AI, archives, editor…) adds its commands | <100ms ✅ |
+| Context Menu | Right-click menu for files, folders, selection and empty space | Standard |
 | Responsive Layout | Adapt to window size | Smooth |
 | Accessibility | Screen reader support | WCAG 2.1 AA |
 | Localization | 10+ languages at launch | Standard |
@@ -343,7 +346,7 @@ This goals document maps to the phased development as follows:
 | Phase | Primary Goals Addressed |
 |-------|------------------------|
 | Phase 0-1 | Core navigation, file operations |
-| Phase 2-3 | Tabbed UI, then Windows shell integration |
+| Phase 2-3 | Tabbed UI, design pass + command palette (2.5), file operations + context menu (2.6), then Windows shell integration |
 | Phase 4 | Linux port, desktop integration |
 | Phase 5 | Search & filtering |
 | Phase 6-7 | Developer tools, previews |

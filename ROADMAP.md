@@ -135,12 +135,39 @@ Direction: Zed-inspired — flat surfaces separated by hairlines, dense rows, a 
 - [x] File-type icons with a distinct shape *and* color per kind: folder, generic, code, text, PDF, spreadsheet, image, video, audio, archive, executable, config, link
 - [x] 28 px rows; dates and sizes in monospace so they line up
 - [x] `LUMO_THEME=light|dark` override (otherwise follows Windows)
+- [x] **Command palette** (Ctrl+K / Ctrl+P, toolbar search button): fuzzy search over commands (with shortcuts), open tabs, quick-access places, drives, recent locations and the current folder's items; `>` limits to commands; matched letters highlighted; theme switching. Folders open, files are revealed. (Recursive search is Phase 5.)
 
 ### Mandatory Tests
 - [x] Text contrast meets WCAG AA (4.5:1) on every background in both themes — `theme.rs` unit test
 - [x] Every file kind has its own color — `icons.rs` unit test
+- [x] Palette: fuzzy ranking unit tests; end-to-end tests (run command, open folder, reveal file, `>` prefix, switch tab, Escape/toggle)
+- [x] Palette keystroke in a 10K-entry folder fits a frame — `perf_test.rs` (release: 6.9 ms worst; GOALS target <100 ms)
 - [x] Existing UI, memory and timing tests still pass (no regressions)
 - [x] Screenshots reviewed in light and dark
+
+---
+
+## Phase 2.6: File Operations & Context Menu
+**Goal:** Make Lumo usable as a daily Explorer replacement *before* Phase 3 makes it the default: everyday file operations plus Lumo's own right-click menu.
+
+### Deliverables
+- [ ] Multi-select: Ctrl+click, Shift+click ranges, Ctrl+A
+- [ ] Copy / Cut / Paste, interoperable with Explorer through the Windows clipboard (both directions)
+- [ ] Rename in place (F2), New folder / New text file
+- [ ] Delete to the Recycle Bin; Shift+Delete deletes permanently after confirmation
+- [ ] Undo (Ctrl+Z) for rename, move, copy, create and Recycle-Bin delete
+- [ ] Right-click menu in Lumo's style, contextual for a file, a folder, a multi-selection and empty space — built from the same commands as the palette
+- [ ] Open with…, Copy path, Properties (basic)
+- [ ] All new commands registered in the command palette
+
+### Dependencies
+Phase 2
+
+### Mandatory Tests
+- [ ] Each operation and its undo, end to end (kittest + real files in temp dirs)
+- [ ] Paste of files copied in Explorer, and the reverse (manual on Windows 10 and 11)
+- [ ] Long-running copies don't block the UI (worker thread, progress in the status bar)
+- [ ] Deleting never bypasses the Recycle Bin unless Shift+Delete was confirmed
 
 ---
 
@@ -151,6 +178,7 @@ Direction: Zed-inspired — flat surfaces separated by hairlines, dense rows, a 
 - [ ] Win+E override (HKCU per-user handlers; exact keys to be verified on Windows 10 and 11)
 - [ ] Folder type association override (Downloads, Documents, etc.)
 - [ ] Context menu extension registration
+- [ ] "Show more options" in Lumo's right-click menu: the native Windows shell menu (`IContextMenu`), so third-party entries such as 7-Zip, VS Code or Git appear
 - [ ] First-run configuration wizard (one-time setup)
 - [ ] Rollback mechanism to restore default Explorer
 
@@ -268,6 +296,8 @@ Modify .rs file in editor → Git tab shows "Modified" in red
 - [ ] Media playback (MP4, MP3, AVI)
 - [ ] Thumbnail cache with disk persistence
 - [ ] Internal `PreviewHandler` trait (third-party preview plugins arrive with the Phase 12 SDK)
+- [ ] Quick Peek: Space opens a floating preview of the selected file; arrows move through files while it is open
+- [ ] Simple text editor: open/edit/save text and code files (syntax highlighting, find, undo) — reuses the code preview's highlighter
 
 ### Dependencies
 Phase 6
@@ -296,6 +326,7 @@ Click image → Full preview opens instantly
 - [ ] Job queue with undo/redo support
 - [ ] Copy/move progress with pause/resume
 - [ ] Folder synchronization tool
+- [ ] Archive extraction (ZIP, 7Z, TAR, …) plus a space-saving "Extract and free space" mode powered by HatchZip (integration approach — library vs. bundled CLI — to be decided when the phase starts)
 
 ### Dependencies
 Phase 7
@@ -437,14 +468,14 @@ pub fn compress_folder(path: &Path) -> Result<()> {
 ## Phase Dependencies Graph
 
 ```
-Phase 0 → Phase 1 → Phase 2 (UI) → Phase 3 (Win shell)
+Phase 0 → Phase 1 → Phase 2 (UI) → 2.5 (design) → 2.6 (file ops) → Phase 3 (Win shell)
                         │  └──────→ Phase 4 (Linux, deferred)
                         ↓
                      Phase 5 → Phase 6 → Phase 7 → Phase 8 → Phase 9 → Phase 10 → Phase 11 → Phase 12
 ```
 
 ### Critical Paths
-- **Windows (current focus):** 0 → 1 → 2 → 3 → 5 → 6 → 7 → 8 → 9 → 10
+- **Windows (current focus):** 0 → 1 → 2 → 2.5 → 2.6 → 3 → 5 → 6 → 7 → 8 → 9 → 10
 - **Linux (deferred):** 0 → 1 → 2 → 4, then the shared feature phases
 - **Post-launch:** 10 → 11 → 12
 

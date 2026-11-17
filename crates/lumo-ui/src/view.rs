@@ -63,6 +63,24 @@ impl LumoApp {
                 bottom: 0,
             }))
             .show(ui, |ui| self.file_table(ui, &p));
+
+        if self.palette.is_open() {
+            let key = self.palette_key();
+            if self
+                .palette_cache
+                .as_ref()
+                .is_none_or(|(cached, _)| *cached != key)
+            {
+                self.palette_cache = Some((key, self.palette_items()));
+            }
+            if let Some((_, items)) = &self.palette_cache
+                && let Some(action) = self.palette.show(ui.ctx(), items)
+            {
+                self.actions.push(action);
+            }
+        } else {
+            self.palette_cache = None;
+        }
     }
 
     fn tab_strip(&mut self, ui: &mut Ui, p: &Palette) {
@@ -153,9 +171,29 @@ impl LumoApp {
             }
             ui.add_space(6.0);
             let current = self.tabs[self.active].path().to_path_buf();
-            if let Some(action) = self.address.show(ui, &current, &self.recent) {
-                self.actions.push(action);
-            }
+            // Right to left: the palette button takes its space first and the
+            // address bar fills whatever is left.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let open = self.palette.is_open();
+                if icons::button(
+                    ui,
+                    p,
+                    Icon::Search,
+                    "Command palette",
+                    TOOLBAR_CONTROL,
+                    true,
+                    open,
+                )
+                .on_hover_text("Search commands, tabs, places and files (Ctrl+K)")
+                .clicked()
+                {
+                    self.actions.push(Action::OpenPalette);
+                }
+                ui.add_space(4.0);
+                if let Some(action) = self.address.show(ui, &current, &self.recent) {
+                    self.actions.push(action);
+                }
+            });
         });
     }
 
@@ -165,7 +203,7 @@ impl LumoApp {
             ui.spacing_mut().item_spacing.y = 0.0;
             section_header(ui, p, "QUICK ACCESS");
             for folder in &self.quick_access {
-                let icon = place_icon(folder.label);
+                let icon = icons::place_icon(folder.label);
                 nav_item(
                     ui,
                     p,
@@ -416,19 +454,6 @@ fn row_highlight(p: &Palette, row: Rect, selected: bool, hovered: bool) -> Shape
         ]),
         (false, true) => Shape::rect_filled(row, 0.0, p.hover),
         (false, false) => Shape::Noop,
-    }
-}
-
-fn place_icon(label: &str) -> Icon {
-    match label {
-        "Home" => Icon::Home,
-        "Desktop" => Icon::Desktop,
-        "Documents" => Icon::Documents,
-        "Downloads" => Icon::Downloads,
-        "Pictures" => Icon::Pictures,
-        "Music" => Icon::Music,
-        "Videos" => Icon::Videos,
-        _ => Icon::Folder,
     }
 }
 
