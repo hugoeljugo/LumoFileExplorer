@@ -35,7 +35,8 @@ lumo-cli ls [PATH]             # list a directory (defaults to the current one)
 
 Open tabs are saved on every change to `%APPDATA%\Lumo\data\session.json`
 (`~/.local/share/lumo` on Linux), so they survive crashes. Set `LUMO_DATA_DIR`
-to store state elsewhere.
+to store state elsewhere. Lumo follows the system light/dark setting;
+`LUMO_THEME=light` or `LUMO_THEME=dark` forces a theme.
 
 ### Keyboard shortcuts
 
@@ -63,3 +64,7 @@ to store state elsewhere.
 ## License
 
 [MIT](LICENSE)
+
+Bundled fonts: [IBM Plex Sans](https://github.com/IBM/plex) and
+[Lilex](https://github.com/mishamyrt/Lilex), both under the SIL Open Font
+License 1.1 (see `crates/lumo-ui/assets/fonts/`).

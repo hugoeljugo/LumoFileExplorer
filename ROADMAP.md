@@ -118,6 +118,32 @@ User opens app → navigates to 5 folders → tabs persist after close → reope
 
 ---
 
+## Phase 2.5: Design Pass
+**Goal:** Give Lumo its own look before it replaces Explorer (Phase 3), and put every color/size in one place so later phases and the Phase 10 theme engine build on it.
+
+Direction: Zed-inspired — flat surfaces separated by hairlines, dense rows, a muted palette where the accent is the only color. A first Fluent/Files-style pass looked too much like Explorer, so it was replaced.
+
+**Signature — the lumen:** the active tab and the selected row/sidebar entry carry a Lumo-orange accent line with a soft glow. It ties to the name (*lumo* = light) and makes Lumo recognizable at a glance.
+
+### Deliverables
+- [x] `lumo-ui/src/theme.rs`: design tokens (light + dark palettes, sizes, fonts, lumen) — the only place UI colors are defined
+- [x] Lumo orange (`#FF7A1A`) as the default accent (reading the Windows accent stays available in `lumo-platform` for a future preference)
+- [x] Bundled fonts, compiled into the binary: IBM Plex Sans (UI) and Lilex (numbers, typed paths), both SIL OFL 1.1, unmodified, licenses in `crates/lumo-ui/assets/fonts/`
+- [x] Flat layout: toolbar joined to the active tab, hairline separators, no column grid lines (resize line on hover)
+- [x] Zed-style flat tabs with the lumen on the active tab
+- [x] Line icons for every action and place (back/forward/up/refresh, home, desktop, documents, downloads, pictures, music, videos, drives, hidden-items eye toggle)
+- [x] File-type icons with a distinct shape *and* color per kind: folder, generic, code, text, PDF, spreadsheet, image, video, audio, archive, executable, config, link
+- [x] 28 px rows; dates and sizes in monospace so they line up
+- [x] `LUMO_THEME=light|dark` override (otherwise follows Windows)
+
+### Mandatory Tests
+- [x] Text contrast meets WCAG AA (4.5:1) on every background in both themes — `theme.rs` unit test
+- [x] Every file kind has its own color — `icons.rs` unit test
+- [x] Existing UI, memory and timing tests still pass (no regressions)
+- [x] Screenshots reviewed in light and dark
+
+---
+
 ## Phase 3: Windows Shell Integration (Week 9-10)
 **Goal:** Intercept Win+E and system folder launches
 
@@ -326,6 +352,7 @@ Confirm → Applied instantly
 - [ ] Theme engine (light/dark/custom colors)
 - [ ] Keyboard shortcut customization
 - [ ] Memory profiling and optimization passes
+- [ ] *(Optional)* Folder sizes: lazy, background-priority totals for visible folders, cached in memory (later in the Phase 5 index), with size bars in the Size column. Deferred: not essential yet.
 - [ ] Startup time reduction to <500ms
 - [ ] 1000+ issue backlog cleanup
 - [ ] Documentation completion (user + dev guides)

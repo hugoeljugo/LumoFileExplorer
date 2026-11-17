@@ -297,11 +297,11 @@ fn session_survives_force_close() {
     first
         .state_mut()
         .queue(Action::Navigate(dir.path().join("a")));
-    first.run();
+    settle(&mut first);
     first
         .state_mut()
         .queue(Action::OpenInNewTab(dir.path().join("b")));
-    first.run();
+    settle(&mut first);
     // No shutdown hook runs: dropping the harness is like killing the process.
     drop(first);
 

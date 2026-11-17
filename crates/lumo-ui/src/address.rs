@@ -4,17 +4,18 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{
-    self, Align, Align2, Area, Button, Frame, Key, Layout, Modifiers, Order, Role, Sense,
-    StrokeKind, TextEdit, Ui, UiBuilder, WidgetInfo, vec2,
+    self, Align, Align2, Area, Button, CornerRadius, Frame, Key, Layout, Modifiers, Order,
+    RichText, Role, Sense, Stroke, StrokeKind, TextEdit, Ui, UiBuilder, WidgetInfo, vec2,
 };
 
 use crate::app::Action;
 use crate::complete::Completer;
+use crate::icons::{self, Icon};
+use crate::theme::{self, CONTROL_RADIUS, Palette, TOOLBAR_CONTROL as HEIGHT};
 
 const MAX_SUGGESTIONS: usize = 8;
 /// With more segments than this, the middle ones collapse into "…".
 const MAX_CRUMBS: usize = 5;
-const HEIGHT: f32 = 28.0;
 
 #[derive(Debug, Default)]
 pub struct AddressBar {
@@ -60,32 +61,39 @@ impl AddressBar {
             ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), Sense::click());
         let background = background.on_hover_text("Click to type a path (Ctrl+L)");
         background.widget_info(|| WidgetInfo::labeled(Role::Button, true, "Edit address"));
-        let visuals = ui.visuals();
-        ui.painter()
-            .rect_filled(rect, 4.0, visuals.extreme_bg_color);
-        ui.painter().rect_stroke(
-            rect,
-            4.0,
-            visuals.widgets.inactive.bg_stroke,
-            StrokeKind::Inside,
-        );
+        let p = Palette::of(ui.ctx());
+        // Zed-style: breadcrumbs sit flat on the toolbar; a faint field
+        // appears on hover to show the bar is editable.
+        if background.hovered() {
+            let radius = CornerRadius::same(CONTROL_RADIUS);
+            ui.painter().rect_filled(rect, radius, p.hover);
+            ui.painter()
+                .rect_stroke(rect, radius, Stroke::new(1.0, p.border), StrokeKind::Inside);
+        }
 
         let mut action = None;
+        let crumbs = collapse(breadcrumbs(current));
+        let last = crumbs.len().saturating_sub(1);
         // Added after the background, so the crumb buttons win hit-testing.
         let mut crumbs_ui = ui.new_child(
             UiBuilder::new()
-                .max_rect(rect.shrink2(vec2(6.0, 2.0)))
+                .max_rect(rect.shrink2(vec2(4.0, 2.0)))
                 .layout(Layout::left_to_right(Align::Center)),
         );
-        crumbs_ui.spacing_mut().item_spacing.x = 2.0;
-        for (i, crumb) in collapse(breadcrumbs(current)).into_iter().enumerate() {
+        crumbs_ui.spacing_mut().item_spacing.x = 0.0;
+        crumbs_ui.spacing_mut().button_padding = vec2(6.0, 3.0);
+        for (i, crumb) in crumbs.into_iter().enumerate() {
             if i > 0 {
-                crumbs_ui.weak("›");
+                let (chevron, _) = crumbs_ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+                let icon_rect = egui::Rect::from_center_size(chevron.center(), vec2(10.0, 10.0));
+                icons::paint(crumbs_ui.painter(), icon_rect, Icon::ChevronRight, p.icon);
             }
             match crumb {
                 Some((label, path)) => {
+                    // The current folder reads strongest; ancestors recede.
+                    let color = if i == last { p.text } else { p.text_secondary };
                     let response = crumbs_ui
-                        .add(Button::new(label).frame(false))
+                        .add(Button::new(RichText::new(label).color(color)))
                         .on_hover_text(path.display().to_string());
                     if response.clicked() {
                         action = Some(Action::Navigate(path));
@@ -93,7 +101,7 @@ impl AddressBar {
                 }
                 None => {
                     if crumbs_ui
-                        .add(Button::new("…").frame(false))
+                        .add(Button::new("…"))
                         .on_hover_text("Show full path")
                         .clicked()
                     {
@@ -118,6 +126,7 @@ impl AddressBar {
             vec2(ui.available_width(), HEIGHT),
             TextEdit::singleline(&mut self.text)
                 .id(id)
+                .font(theme::mono(13.0))
                 .hint_text("Type a path")
                 // Keep Tab for accepting a suggestion instead of moving focus.
                 .lock_focus(true)

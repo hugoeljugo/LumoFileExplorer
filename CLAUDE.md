@@ -110,6 +110,9 @@ pub trait FileSystemProvider: Send + Sync {
 
 ### UI (egui) Rules Learned the Hard Way
 - **Never give egui a fresh widget id per transient thing** (tab, folder, file). egui keeps state for every id it has seen, forever; a table id per tab leaked ~90 KB per closed tab. Share one id and store per-item state (scroll offset, etc.) in our own structs.
+- **All colors and sizes come from `lumo-ui/src/theme.rs`** (`Palette::of(ctx)`, size constants). Never hard-code a color in a view; add a token instead, and keep the WCAG contrast test passing. (File-type icon colors live in `icons.rs` by design.)
+- **Visual language is Zed-inspired, with the lumen as Lumo's signature**: flat surfaces, hairlines, no rounded cards; the current/selected item gets `theme::lumen` (accent line + glow). Don't add a second highlight style.
+- **Bundled fonts (IBM Plex Sans, Lilex) must stay unmodified** — they are SIL OFL 1.1 and "Plex" is a Reserved Font Name; renaming or editing the files would break the license. Ship the license files with every distribution.
 - **No icon glyphs from fonts** — draw icons in `lumo-ui/src/icons.rs`. Fonts differ per machine (Linux has no Segoe UI), and egui_kittest fails tests on any missing glyph.
 - **Views push `Action`s; `LumoApp::apply` mutates state** after drawing. Keep that split so behavior stays testable.
 - **UI tests use egui_kittest** (`crates/lumo-ui/tests/`). Simulate Ctrl as `common::CTRL` (ctrl + command), like winit does on Windows; plain `Modifiers::CTRL` misses text-edit shortcuts such as Ctrl+A.

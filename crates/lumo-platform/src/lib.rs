@@ -60,12 +60,13 @@ pub fn open_path(path: &Path) -> io::Result<()> {
     open::that_detached(path)
 }
 
-/// The platform's UI font file, if there is a well-known one (Segoe UI on Windows).
-pub fn ui_font() -> Option<Vec<u8>> {
+/// The user's system accent color as RGB, where the OS has one (Windows).
+/// Not used yet: Lumo defaults to its own orange; a "follow system accent"
+/// preference will use this.
+pub fn accent_color() -> Option<[u8; 3]> {
     #[cfg(windows)]
     {
-        let fonts = std::env::var_os("WINDIR").map(|dir| PathBuf::from(dir).join("Fonts"))?;
-        std::fs::read(fonts.join("segoeui.ttf")).ok()
+        windows::accent_color()
     }
     #[cfg(not(windows))]
     {

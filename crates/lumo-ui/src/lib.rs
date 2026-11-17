@@ -9,6 +9,7 @@ mod listing;
 mod nav;
 mod session;
 mod tab;
+mod theme;
 mod view;
 
 pub use app::{APP_ID, Action, Config, LumoApp, Start};

@@ -85,8 +85,7 @@ pub struct LumoApp {
 
 impl LumoApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: Config) -> Self {
-        crate::view::install_fonts(&cc.egui_ctx);
-        crate::view::apply_style(&cc.egui_ctx);
+        crate::theme::install(&cc.egui_ctx);
 
         let restored = match (&config.start, &config.session_file) {
             (Start::Restore, Some(file)) => Session::load(file),
