@@ -1,10 +1,13 @@
 //! The command palette (Ctrl+K / Ctrl+P): one fuzzy search box over
 //! commands, open tabs, places and the current folder's items. Typing `>`
 //! first limits it to commands.
+//!
+//! The same component is Lumo's right-click menu ("search menu"): opened at
+//! the cursor with only the commands that fit what was clicked.
 
 use eframe::egui::{
     Align2, Area, Context, CornerRadius, FontSelection, Frame, Id, Key, Margin, Modifiers, Order,
-    Rect, RichText, Role, ScrollArea, Sense, Stroke, TextEdit, TextFormat, TextStyle, Ui,
+    Pos2, Rect, RichText, Role, ScrollArea, Sense, Stroke, TextEdit, TextFormat, TextStyle, Ui,
     WidgetInfo, WidgetText, pos2, text::LayoutJob, vec2,
 };
 
@@ -17,6 +20,8 @@ use crate::theme::{self, Edge, Palette as Colors};
 const MAX_RESULTS: usize = 60;
 const ROW_HEIGHT: f32 = 32.0;
 const MAX_WIDTH: f32 = 640.0;
+const MENU_WIDTH: f32 = 320.0;
+const MAX_MENU_HEIGHT: f32 = 330.0;
 const MAX_LIST_HEIGHT: f32 = 380.0;
 
 /// What a palette entry is; also its rank when scores tie.
@@ -51,6 +56,8 @@ pub struct CommandPalette {
     results: Vec<(usize, Match)>,
     /// Item count the results were computed for; a change re-ranks.
     ranked_len: Option<usize>,
+    /// Open as the right-click menu at this position instead of the top.
+    menu_at: Option<Pos2>,
 }
 
 impl CommandPalette {
@@ -64,6 +71,16 @@ impl CommandPalette {
             request_focus: true,
             ..Self::default()
         };
+    }
+
+    /// Opens as the right-click search menu at `pos`.
+    pub fn open_menu(&mut self, pos: Pos2) {
+        self.open();
+        self.menu_at = Some(pos);
+    }
+
+    pub fn is_menu(&self) -> bool {
+        self.open && self.menu_at.is_some()
     }
 
     pub fn close(&mut self) {
@@ -106,30 +123,41 @@ impl CommandPalette {
         }
 
         let colors = Colors::of(ctx);
-        let width = (ctx.content_rect().width() - 80.0).clamp(280.0, MAX_WIDTH);
+        let menu = self.menu_at.is_some();
+        let width = if menu {
+            MENU_WIDTH
+        } else {
+            (ctx.content_rect().width() - 80.0).clamp(280.0, MAX_WIDTH)
+        };
         let mut clicked = None;
         let area = Area::new(Id::unique("command-palette"))
             .order(Order::Foreground)
-            .anchor(Align2::CENTER_TOP, vec2(0.0, 64.0))
-            .show(ctx, |ui| {
-                Frame::popup(ui.style())
-                    .fill(colors.elevated)
-                    .stroke(Stroke::new(1.0, colors.border))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(Margin::ZERO)
-                    .show(ui, |ui| {
-                        ui.set_width(width);
-                        self.search_field(ui, &colors, items);
-                        let line_y = ui.cursor().top();
-                        ui.painter().add(theme::hairline(
-                            &colors,
-                            pos2(ui.max_rect().left(), line_y),
-                            ui.max_rect().right(),
-                        ));
-                        clicked = self.result_list(ui, &colors, items);
+            .constrain(true);
+        let area = match self.menu_at {
+            Some(pos) => area.fixed_pos(pos),
+            None => area.anchor(Align2::CENTER_TOP, vec2(0.0, 64.0)),
+        };
+        let area = area.show(ctx, |ui| {
+            Frame::popup(ui.style())
+                .fill(colors.elevated)
+                .stroke(Stroke::new(1.0, colors.border))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::ZERO)
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    self.search_field(ui, &colors, items);
+                    let line_y = ui.cursor().top();
+                    ui.painter().add(theme::hairline(
+                        &colors,
+                        pos2(ui.max_rect().left(), line_y),
+                        ui.max_rect().right(),
+                    ));
+                    clicked = self.result_list(ui, &colors, items);
+                    if !menu {
                         self.footer(ui, &colors);
-                    });
-            });
+                    }
+                });
+        });
 
         // Clicking anywhere outside closes it, like Escape.
         let clicked_outside = ctx.input(|i| {
@@ -171,7 +199,11 @@ impl CommandPalette {
                         TextEdit::singleline(&mut self.query)
                             .id(Id::unique("command-palette-query"))
                             .frame(Frame::NONE)
-                            .hint_text("Search commands, tabs, places and files…")
+                            .hint_text(if self.menu_at.is_some() {
+                                "Type to filter…"
+                            } else {
+                                "Search commands, tabs, places and files…"
+                            })
                             .desired_width(f32::INFINITY)
                             .lock_focus(true),
                     );
@@ -202,8 +234,13 @@ impl CommandPalette {
         }
         let mut clicked = None;
         let scroll_to = std::mem::take(&mut self.scroll_to_selected);
+        let max_height = if self.menu_at.is_some() {
+            MAX_MENU_HEIGHT
+        } else {
+            MAX_LIST_HEIGHT
+        };
         ScrollArea::vertical()
-            .max_height(MAX_LIST_HEIGHT)
+            .max_height(max_height)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;

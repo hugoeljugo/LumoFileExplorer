@@ -31,6 +31,7 @@ pub fn at(path: &Path) -> Config {
     Config {
         start: Start::Path(path.to_path_buf()),
         session_file: None,
+        isolated: true,
     }
 }
 

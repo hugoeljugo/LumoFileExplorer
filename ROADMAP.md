@@ -150,24 +150,39 @@ Direction: Zed-inspired — flat surfaces separated by hairlines, dense rows, a 
 ## Phase 2.6: File Operations & Context Menu
 **Goal:** Make Lumo usable as a daily Explorer replacement *before* Phase 3 makes it the default: everyday file operations plus Lumo's own right-click menu.
 
+Design (chosen to feel like Lumo, not Explorer):
+- **Right-click → search menu:** a mini command palette at the cursor with only the actions that fit what was clicked; type to filter ("ren" + Enter).
+- **Selection tray:** selecting 2+ items slides up a floating bar ("3 selected · 42 MB" + Copy / Cut / Delete / More). Hovering a row shows a tick circle, so multi-select works without holding Ctrl.
+- **Undo toasts instead of "Are you sure?":** deletes go to the Recycle Bin and a toast offers Undo; only permanent deletes (Shift+Delete) ask first.
+
 ### Deliverables
-- [ ] Multi-select: Ctrl+click, Shift+click ranges, Ctrl+A
-- [ ] Copy / Cut / Paste, interoperable with Explorer through the Windows clipboard (both directions)
-- [ ] Rename in place (F2), New folder / New text file
-- [ ] Delete to the Recycle Bin; Shift+Delete deletes permanently after confirmation
-- [ ] Undo (Ctrl+Z) for rename, move, copy, create and Recycle-Bin delete
-- [ ] Right-click menu in Lumo's style, contextual for a file, a folder, a multi-selection and empty space — built from the same commands as the palette
-- [ ] Open with…, Copy path, Properties (basic)
-- [ ] All new commands registered in the command palette
+- [x] Multi-select: Ctrl+click, Shift+click ranges, Shift+arrows, Ctrl+A, tick circles on hover; Esc clears
+- [x] Selection tray (2+ items): count, total size, Copy / Cut / Recycle Bin / More / Clear, with the lumen
+- [x] Copy / Cut / Paste through the Windows clipboard in Explorer's format (file list + "Preferred DropEffect"), so it works with Explorer both ways; cut items are dimmed until pasted
+- [x] Conflicts never overwrite: same-folder copies become "name - Copy", other conflicts "name (2)"; moving into the same folder is a no-op; a folder can't be copied into itself
+- [x] Rename in place (F2): the name without its extension is pre-selected; Enter/click-away commits, Esc cancels; invalid or taken names are refused with the box kept open
+- [x] New folder (Ctrl+Shift+N) / New text file, immediately in rename mode
+- [x] Delete → Recycle Bin with an undo toast; Shift+Delete asks first, then deletes permanently
+- [x] Undo (Ctrl+Z or the toast's button) for rename, create, copy, move and Recycle-Bin delete; undoing a copy/create moves it to the Recycle Bin (so even undo is recoverable)
+- [x] Long operations run on background jobs with progress and Cancel in the status bar; the UI never waits
+- [x] Right-click **search menu** (and Shift+F10): the palette at the cursor with only the commands that fit — selection commands on items, Paste/New/Sort/View on empty space
+- [x] Open with… (Windows chooser), Open in new tab (Ctrl+Enter), Copy path (Ctrl+Shift+C), Properties (Alt+Enter)
+- [x] All new commands in the command palette, with shortcuts
 
 ### Dependencies
 Phase 2
 
 ### Mandatory Tests
-- [ ] Each operation and its undo, end to end (kittest + real files in temp dirs)
-- [ ] Paste of files copied in Explorer, and the reverse (manual on Windows 10 and 11)
-- [ ] Long-running copies don't block the UI (worker thread, progress in the status bar)
-- [ ] Deleting never bypasses the Recycle Bin unless Shift+Delete was confirmed
+- [x] Each operation and its undo, end to end (kittest + real files in temp dirs) — `tests/fileops_test.rs`; core operations — `lumo-core/src/ops`
+- [x] Tests run `isolated` (private clipboard and bin) so they never touch the user's clipboard or Recycle Bin; the real Recycle Bin is covered by `lumo-platform`'s trash round-trip test and the real clipboard by an opt-in test
+- [x] Paste of files copied in Explorer, and the reverse — verified by hand on Windows 11 (copy and cut, both directions); Windows 10 still to check
+- [x] Long-running copies don't block the UI (background jobs; chunked copy reports progress and can be cancelled mid-file)
+- [x] Deleting never bypasses the Recycle Bin unless Shift+Delete was confirmed — `shift_delete_asks_first`
+
+Notes:
+- Ctrl+C/X/V: egui-winit only reports a paste when the clipboard holds *text*, so on Windows Lumo turns eframe's clipboard shortcuts off, handles the keys itself for files, and translates them back for text fields (`LumoApp::raw_input_hook`).
+- Paste conflicts currently "keep both"; a replace/skip prompt can come later.
+- Drag and drop between folders/windows isn't part of this phase.
 
 ---
 

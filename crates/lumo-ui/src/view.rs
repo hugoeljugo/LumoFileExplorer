@@ -5,9 +5,12 @@
 use std::path::Path;
 
 use eframe::egui::{
-    self, Align, Align2, Button, CentralPanel, FontSelection, Frame, Label, Layout, Margin, Panel,
-    Rect, RichText, Role, ScrollArea, Sense, Shape, TextStyle, TextWrapMode, Ui, WidgetInfo,
-    WidgetText, pos2, vec2,
+    self, Align, Align2, Area, Button, CentralPanel, Color32, Context, CornerRadius, FontSelection,
+    Frame, Id, Label, Layout, Margin, Modal, Order, Panel, ProgressBar, Rect, RichText, Role,
+    ScrollArea, Sense, Shape, Stroke, TextEdit, TextStyle, TextWrapMode, Ui, WidgetInfo,
+    WidgetText, pos2,
+    text::{CCursor, CCursorRange},
+    vec2,
 };
 use egui_extras::{Column, TableBuilder};
 use lumo_core::EntryKind;
@@ -23,6 +26,8 @@ const MAX_TAB_WIDTH: f32 = 220.0;
 const ROW_GLOW: f32 = 140.0;
 const NAV_GLOW: f32 = 70.0;
 const TAB_GLOW: f32 = 12.0;
+/// The selection tray appears from this many selected items.
+const TRAY_MIN_SELECTION: usize = 2;
 
 impl LumoApp {
     pub(crate) fn draw(&mut self, ui: &mut Ui) {
@@ -71,7 +76,12 @@ impl LumoApp {
                 .as_ref()
                 .is_none_or(|(cached, _)| *cached != key)
             {
-                self.palette_cache = Some((key, self.palette_items()));
+                let items = if self.palette.is_menu() {
+                    self.menu_items()
+                } else {
+                    self.palette_items()
+                };
+                self.palette_cache = Some((key, items));
             }
             if let Some((_, items)) = &self.palette_cache
                 && let Some(action) = self.palette.show(ui.ctx(), items)
@@ -81,6 +91,12 @@ impl LumoApp {
         } else {
             self.palette_cache = None;
         }
+
+        let ctx = ui.ctx().clone();
+        self.selection_tray(&ctx, &p);
+        self.toast_view(&ctx, &p);
+        self.delete_confirmation(&ctx, &p);
+        self.properties_window(&ctx, &p);
     }
 
     fn tab_strip(&mut self, ui: &mut Ui, p: &Palette) {
@@ -174,7 +190,8 @@ impl LumoApp {
             // Right to left: the palette button takes its space first and the
             // address bar fills whatever is left.
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let open = self.palette.is_open();
+                // Lit only for the palette itself, not the right-click menu.
+                let open = self.palette.is_open() && !self.palette.is_menu();
                 if icons::button(
                     ui,
                     p,
@@ -234,6 +251,22 @@ impl LumoApp {
     }
 
     fn file_table(&mut self, ui: &mut Ui, p: &Palette) {
+        // The empty area of the list: click clears the selection, right-click
+        // opens the folder's menu. Rows are added later, so they sit on top.
+        let list_rect = ui.max_rect();
+        self.table_rect = Some(list_rect);
+        let background = ui.interact(list_rect, Id::unique("lumo-file-list"), Sense::click());
+        background.widget_info(|| WidgetInfo::labeled(Role::ListBox, true, "File list"));
+        if background.clicked() {
+            self.actions.push(Action::ClearSelection);
+        }
+        if background.secondary_clicked() {
+            let pos = background
+                .interact_pointer_pos()
+                .unwrap_or(list_rect.center());
+            self.actions.push(Action::ContextMenu { row: None, pos });
+        }
+
         let scroll_requested = self.tabs[self.active].take_scroll_request();
         let tab = &self.tabs[self.active];
         let Some(listing) = tab.listing() else {
@@ -259,6 +292,12 @@ impl LumoApp {
         let view = listing.view();
         let selected = tab.selected();
         let sort = tab.sort();
+        let tab_id = tab.id();
+        let folder = tab.path().to_path_buf();
+        // With several items selected, every row shows its tick circle.
+        let multi = tab.selection_count() >= TRAY_MIN_SELECTION;
+        let cut_paths = &self.cut_paths;
+        let renaming = &mut self.renaming;
         // The table is shared by all tabs, so restore this tab's scroll
         // position whenever it shows a different tab or folder than last frame.
         let shown = (tab.id(), tab.path().to_path_buf());
@@ -304,7 +343,7 @@ impl LumoApp {
                 for (i, (column, label)) in columns.into_iter().enumerate() {
                     header.col(|ui| {
                         if i == 0 {
-                            ui.add_space(30.0);
+                            ui.add_space(52.0);
                         }
                         let text = RichText::new(label).small().color(p.text_secondary);
                         if ui
@@ -334,9 +373,19 @@ impl LumoApp {
                     // We draw our own highlights instead of egui_extras' default ones.
                     table_row.set_hovered(false);
                     let mut background = None;
+                    let is_selected = tab.is_selected(index);
+                    let path = folder.join(&row.entry.name);
+                    let is_cut = !cut_paths.is_empty() && cut_paths.contains(&path);
                     table_row.col(|ui| {
                         background = Some((ui.painter().clone(), ui.painter().add(Shape::Noop)));
-                        ui.add_space(8.0);
+                        ui.add_space(6.0);
+                        let row_hovered = ui.input(|i| i.pointer.hover_pos()).is_some_and(|pos| {
+                            row_x.contains(pos.x) && ui.max_rect().y_range().contains(pos.y)
+                        });
+                        if tick_circle(ui, p, &row.name, is_selected, row_hovered || multi) {
+                            actions.push(Action::ToggleRow(index));
+                        }
+                        ui.add_space(4.0);
                         let icon = match row.entry.kind {
                             EntryKind::Directory => Icon::Folder,
                             EntryKind::Symlink => Icon::Link,
@@ -346,12 +395,26 @@ impl LumoApp {
                         };
                         icons::inline(ui, icon, p.icon);
                         ui.add_space(2.0);
-                        let color = if row.entry.hidden {
-                            p.text_secondary
-                        } else {
-                            p.text
-                        };
-                        ui.add(Label::new(RichText::new(&row.name).color(color)).truncate());
+                        match renaming
+                            .as_mut()
+                            .filter(|r| r.tab == tab_id && r.path == path)
+                        {
+                            Some(rename) => {
+                                if let Some(action) = rename_field(ui, rename, row.is_dir()) {
+                                    actions.push(action);
+                                }
+                            }
+                            None => {
+                                let color = if row.entry.hidden || is_cut {
+                                    p.text_secondary
+                                } else {
+                                    p.text
+                                };
+                                ui.add(
+                                    Label::new(RichText::new(&row.name).color(color)).truncate(),
+                                );
+                            }
+                        }
                     });
                     table_row.col(|ui| {
                         ui.label(
@@ -374,7 +437,6 @@ impl LumoApp {
                         });
                     });
                     let response = table_row.response();
-                    let is_selected = selected == Some(index);
                     if let Some((painter, slot)) = background {
                         let row = Rect::from_x_y_ranges(row_x, response.rect.y_range());
                         painter.set(slot, row_highlight(p, row, is_selected, response.hovered()));
@@ -382,7 +444,21 @@ impl LumoApp {
                     if response.double_clicked() {
                         actions.push(Action::OpenRow(index));
                     } else if response.clicked() {
-                        actions.push(Action::Select(Some(index)));
+                        let modifiers = response.ctx.input(|i| i.modifiers);
+                        actions.push(Action::ClickRow {
+                            row: index,
+                            ctrl: modifiers.command,
+                            shift: modifiers.shift,
+                        });
+                    }
+                    if response.secondary_clicked() {
+                        let pos = response
+                            .interact_pointer_pos()
+                            .unwrap_or(response.rect.center());
+                        actions.push(Action::ContextMenu {
+                            row: Some(index),
+                            pos,
+                        });
                     }
                 });
             });
@@ -412,13 +488,41 @@ impl LumoApp {
                 if listing.unreadable() > 0 {
                     ui.label(small(format!("· {} unreadable", listing.unreadable())));
                 }
-                if let Some(row) = tab.selected_row() {
+                let selected = tab.selection_count();
+                if selected == 1
+                    && let Some(row) = tab.selected_row()
+                {
                     let detail = if row.is_dir() {
                         String::new()
                     } else {
                         format!("  {}", row.size_label)
                     };
                     ui.label(small(format!("· 1 item selected{detail}")));
+                } else if selected > 1 {
+                    let size = crate::format::size(tab.selected_size());
+                    ui.label(small(format!("· {selected} items selected  {size}")));
+                }
+            }
+            if let Some(job) = self.jobs.first() {
+                ui.add_space(8.0);
+                ui.label(small(format!("{}…", job.label)));
+                match job.fraction() {
+                    Some(fraction) => {
+                        ui.add(
+                            ProgressBar::new(fraction)
+                                .desired_width(110.0)
+                                .desired_height(6.0),
+                        );
+                    }
+                    None => {
+                        ui.spinner();
+                    }
+                }
+                if icons::button(ui, p, Icon::Close, "Cancel", 20.0, true, false)
+                    .on_hover_text("Cancel")
+                    .clicked()
+                {
+                    self.actions.push(Action::CancelJobs);
                 }
             }
             if let Some(message) = &self.status {
@@ -443,6 +547,282 @@ impl LumoApp {
             });
         });
     }
+}
+
+impl LumoApp {
+    /// The floating bar shown while several items are selected.
+    fn selection_tray(&mut self, ctx: &Context, p: &Palette) {
+        let tab = &self.tabs[self.active];
+        let count = tab.selection_count();
+        let (Some(rect), true) = (self.table_rect, count >= TRAY_MIN_SELECTION) else {
+            return;
+        };
+        let size = crate::format::size(tab.selected_size());
+        let mut actions = Vec::new();
+        Area::new(Id::unique("lumo-selection-tray"))
+            .order(Order::Foreground)
+            .pivot(Align2::CENTER_BOTTOM)
+            .fixed_pos(pos2(rect.center().x, rect.bottom() - 16.0))
+            .show(ctx, |ui| {
+                let frame = overlay_frame(p).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.label(RichText::new(format!("{count} selected")).color(p.text));
+                        ui.label(RichText::new(format!("· {size}")).color(p.text_secondary));
+                        ui.add_space(10.0);
+                        let buttons = [
+                            (Icon::Copy, "Copy", "Ctrl+C", Action::Copy),
+                            (Icon::Cut, "Cut", "Ctrl+X", Action::Cut),
+                            (Icon::Trash, "Move to Recycle Bin", "Del", Action::Trash),
+                            (
+                                Icon::Search,
+                                "More actions",
+                                "Shift+F10",
+                                Action::ContextMenuForSelection,
+                            ),
+                        ];
+                        for (icon, name, key, action) in buttons {
+                            if icons::button(ui, p, icon, name, 28.0, true, false)
+                                .on_hover_text(format!("{name} ({key})"))
+                                .clicked()
+                            {
+                                actions.push(action);
+                            }
+                        }
+                        ui.add_space(4.0);
+                        if icons::button(ui, p, Icon::Close, "Clear selection", 28.0, true, false)
+                            .on_hover_text("Clear selection (Esc)")
+                            .clicked()
+                        {
+                            actions.push(Action::ClearSelection);
+                        }
+                    });
+                });
+                ui.painter()
+                    .add(theme::lumen(p, frame.response.rect, Edge::Top, 10.0));
+            });
+        self.actions.extend(actions);
+    }
+
+    /// Short-lived message at the bottom right, with Undo when it applies.
+    fn toast_view(&mut self, ctx: &Context, p: &Palette) {
+        let (Some(toast), Some(rect)) = (&self.toast, self.table_rect) else {
+            return;
+        };
+        let can_undo = toast.undo && !self.undo.is_empty();
+        let color = if toast.error {
+            ctx.global_style().visuals.error_fg_color
+        } else {
+            p.text
+        };
+        let message = toast.message.clone();
+        let mut actions = Vec::new();
+        // Above the tray when both are showing.
+        let lift = if self.tabs[self.active].selection_count() >= TRAY_MIN_SELECTION {
+            64.0
+        } else {
+            16.0
+        };
+        Area::new(Id::unique("lumo-toast"))
+            .order(Order::Foreground)
+            .pivot(Align2::RIGHT_BOTTOM)
+            .fixed_pos(rect.right_bottom() - vec2(16.0, lift))
+            .show(ctx, |ui| {
+                overlay_frame(p).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(message).color(color));
+                        if can_undo {
+                            ui.add_space(8.0);
+                            if ui
+                                .add(Button::new(RichText::new("Undo").color(p.accent)))
+                                .on_hover_text("Undo (Ctrl+Z)")
+                                .clicked()
+                            {
+                                actions.push(Action::Undo);
+                                actions.push(Action::DismissToast);
+                            }
+                        }
+                        if icons::button(ui, p, Icon::Close, "Dismiss", 22.0, true, false).clicked()
+                        {
+                            actions.push(Action::DismissToast);
+                        }
+                    });
+                });
+            });
+        self.actions.extend(actions);
+    }
+
+    /// "Delete permanently?" — the one operation that asks first.
+    fn delete_confirmation(&mut self, ctx: &Context, p: &Palette) {
+        let Some(paths) = &self.confirm_delete else {
+            return;
+        };
+        let what = match paths.as_slice() {
+            [one] => format!(
+                "\"{}\"",
+                one.file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
+            ),
+            many => format!("{} items", many.len()),
+        };
+        let mut actions = Vec::new();
+        let modal = Modal::new(Id::unique("lumo-confirm-delete"))
+            .frame(overlay_frame(p).inner_margin(Margin::same(18)))
+            .show(ctx, |ui| {
+                ui.set_max_width(360.0);
+                ui.label(RichText::new("Delete permanently?").font(theme::semibold(16.0)).color(p.text));
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "{what} will be deleted without going to the Recycle Bin. This can't be undone."
+                    ))
+                    .color(p.text_secondary),
+                );
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    let danger = ctx.global_style().visuals.error_fg_color;
+                    if ui
+                        .add(Button::new(RichText::new("Delete").color(Color32::WHITE)).fill(danger))
+                        .clicked()
+                    {
+                        actions.push(Action::ConfirmDelete);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        actions.push(Action::CancelDelete);
+                    }
+                });
+            });
+        if modal.should_close() && actions.is_empty() {
+            actions.push(Action::CancelDelete);
+        }
+        self.actions.extend(actions);
+    }
+
+    fn properties_window(&mut self, ctx: &Context, p: &Palette) {
+        let Some(properties) = &self.properties else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new(RichText::new("Properties").color(p.text))
+            .id(Id::unique("lumo-properties"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_pos(
+                self.table_rect
+                    .map_or(pos2(240.0, 160.0), |r| r.center() - vec2(170.0, 140.0)),
+            )
+            .frame(overlay_frame(p).inner_margin(Margin::same(14)))
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(&properties.name)
+                        .font(theme::semibold(16.0))
+                        .color(p.text),
+                );
+                ui.add_space(8.0);
+                egui::Grid::new("lumo-properties-grid")
+                    .num_columns(2)
+                    .spacing(vec2(16.0, 6.0))
+                    .show(ui, |ui| {
+                        let flags = [
+                            properties.hidden.then_some("Hidden"),
+                            properties.read_only.then_some("Read-only"),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                        for (label, value) in [
+                            ("Type", properties.kind.as_str()),
+                            ("Location", properties.location.as_str()),
+                            ("Size", properties.size.as_str()),
+                            ("Created", properties.created.as_str()),
+                            ("Modified", properties.modified.as_str()),
+                            ("Accessed", properties.accessed.as_str()),
+                            ("Attributes", if flags.is_empty() { "—" } else { &flags }),
+                        ] {
+                            ui.label(RichText::new(label).color(p.text_secondary));
+                            ui.label(RichText::new(value).color(p.text));
+                            ui.end_row();
+                        }
+                    });
+            });
+        if !open {
+            self.actions.push(Action::CloseProperties);
+        }
+    }
+}
+
+/// Elevated floating surface: tray, toast, dialogs.
+fn overlay_frame(p: &Palette) -> Frame {
+    Frame::new()
+        .fill(p.elevated)
+        .stroke(Stroke::new(1.0, p.border))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::symmetric(12, 6))
+        .shadow(egui::Shadow {
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
+            color: Color32::from_black_alpha(60),
+        })
+}
+
+/// The round checkbox at the start of a row. Returns `true` when clicked.
+fn tick_circle(ui: &mut Ui, p: &Palette, name: &str, selected: bool, visible: bool) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+    response.widget_info(|| {
+        WidgetInfo::selected(Role::CheckBox, true, selected, format!("Select {name}"))
+    });
+    if visible || selected {
+        let center = rect.center();
+        if selected {
+            ui.painter().circle_filled(center, 7.0, p.accent);
+            let check = Rect::from_center_size(center, vec2(10.0, 10.0));
+            icons::paint(ui.painter(), check, Icon::Check, Color32::WHITE);
+        } else {
+            let color = if response.hovered() { p.text } else { p.icon };
+            ui.painter()
+                .circle_stroke(center, 6.5, Stroke::new(1.2, color));
+        }
+    }
+    response.on_hover_text("Select").clicked()
+}
+
+/// The in-place rename box. Enter or clicking away commits; Escape cancels.
+fn rename_field(ui: &mut Ui, rename: &mut crate::files::Renaming, is_dir: bool) -> Option<Action> {
+    let id = Id::unique("lumo-rename-field");
+    let response = ui.add(
+        TextEdit::singleline(&mut rename.text)
+            .id(id)
+            .hint_text("New name")
+            .desired_width((ui.available_width() - 8.0).max(60.0)),
+    );
+    if rename.select_stem {
+        rename.select_stem = false;
+        response.request_focus();
+        // Like Explorer: select the name but not the extension.
+        let stem = match rename.text.rfind('.') {
+            Some(dot) if dot > 0 && !is_dir => rename.text[..dot].chars().count(),
+            _ => rename.text.chars().count(),
+        };
+        if let Some(mut state) = TextEdit::load_state(ui.ctx(), id) {
+            state
+                .cursor
+                .set_char_range(Some(CCursorRange::two(CCursor::new(0), CCursor::new(stem))));
+            state.store(ui.ctx(), id);
+        }
+    }
+    if response.lost_focus() {
+        let escaped = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        return Some(if escaped {
+            Action::CancelRename
+        } else {
+            Action::CommitRename
+        });
+    }
+    None
 }
 
 /// Hover/selection background for a file row. Selected rows carry the lumen.

@@ -31,6 +31,15 @@ pub enum Icon {
     EyeOff,
     Search,
     Theme,
+    Cut,
+    Copy,
+    Paste,
+    Rename,
+    Trash,
+    Info,
+    Check,
+    NewFolder,
+    Undo,
     // Line icons: places.
     Home,
     Desktop,
@@ -160,6 +169,71 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             g.circle((8.0, 8.0), 5.5);
             let half = g.arc((8.0, 8.0), 5.5, -FRAC_PI_2, FRAC_PI_2);
             painter.add(Shape::convex_polygon(half, color, Stroke::NONE));
+        }
+        Icon::Cut => {
+            g.circle((4.5, 12.0), 2.2);
+            g.circle((11.5, 12.0), 2.2);
+            g.line((5.8, 10.3), (11.0, 2.5));
+            g.line((10.2, 10.3), (5.0, 2.5));
+        }
+        Icon::Copy => {
+            g.rect((5.5, 5.5), (14.0, 14.0), 1.5);
+            g.polyline_at(&[
+                (10.5, 5.5),
+                (10.5, 2.0),
+                (2.0, 2.0),
+                (2.0, 10.5),
+                (5.5, 10.5),
+            ]);
+        }
+        Icon::Paste => {
+            g.rect((2.5, 3.0), (13.5, 14.5), 1.5);
+            g.rect((5.5, 1.5), (10.5, 4.5), 1.0);
+            g.line((5.5, 8.5), (10.5, 8.5));
+            g.line((5.5, 11.0), (9.0, 11.0));
+        }
+        Icon::Rename => {
+            g.line((2.5, 13.5), (5.5, 13.0));
+            g.polyline_at(&[
+                (5.5, 13.0),
+                (13.5, 5.0),
+                (11.0, 2.5),
+                (3.0, 10.5),
+                (2.5, 13.5),
+            ]);
+            g.line((9.5, 4.0), (12.0, 6.5));
+        }
+        Icon::Trash => {
+            g.line((2.0, 4.0), (14.0, 4.0));
+            g.polyline_at(&[(6.0, 4.0), (6.0, 2.0), (10.0, 2.0), (10.0, 4.0)]);
+            g.polyline_at(&[(3.5, 4.0), (4.5, 14.0), (11.5, 14.0), (12.5, 4.0)]);
+            g.line((6.8, 7.0), (6.8, 11.5));
+            g.line((9.2, 7.0), (9.2, 11.5));
+        }
+        Icon::Info => {
+            g.circle((8.0, 8.0), 6.0);
+            g.line((8.0, 7.5), (8.0, 11.5));
+            g.dot((8.0, 5.0), 0.9);
+        }
+        Icon::Check => g.polyline_at(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)]),
+        Icon::NewFolder => {
+            g.polyline_at(&[
+                (8.0, 13.5),
+                (1.5, 13.5),
+                (1.5, 3.0),
+                (6.0, 3.0),
+                (7.5, 4.5),
+                (14.5, 4.5),
+                (14.5, 8.0),
+            ]);
+            g.line((12.0, 9.5), (12.0, 15.0));
+            g.line((9.3, 12.25), (14.7, 12.25));
+        }
+        Icon::Undo => {
+            let points = g.arc((9.0, 9.5), 4.5, -FRAC_PI_2, FRAC_PI_2);
+            g.polyline(points);
+            g.line((9.0, 5.0), (3.0, 5.0));
+            g.head(g.at((9.0, 5.0)), g.at((3.0, 5.0)));
         }
         Icon::Home => {
             g.polyline_at(&[(2.0, 8.0), (8.0, 2.5), (14.0, 8.0)]);

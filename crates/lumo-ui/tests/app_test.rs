@@ -290,6 +290,7 @@ fn session_survives_force_close() {
     let session_file = state.path().join("session.json");
     let config = Config {
         start: Start::Restore,
+        isolated: true,
         session_file: Some(session_file.clone()),
     };
 
@@ -333,6 +334,7 @@ fn restore_drops_folders_that_no_longer_exist() {
     let mut h = harness(Config {
         start: Start::Restore,
         session_file: Some(session_file),
+        isolated: true,
     });
     settle(&mut h);
 
@@ -361,6 +363,7 @@ fn explicit_path_does_not_restore_session() {
     let h = harness(Config {
         start: Start::Path(dir.path().join("b")),
         session_file: Some(session_file),
+        isolated: true,
     });
 
     assert_eq!(h.state().tabs().len(), 1);

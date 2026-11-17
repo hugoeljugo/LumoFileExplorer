@@ -1,6 +1,7 @@
 //! Platform-agnostic core of Lumo: filesystem access, scanning and (later) indexing.
 
 pub mod fs;
+pub mod ops;
 pub mod scan;
 
 pub use fs::{

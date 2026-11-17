@@ -10,8 +10,10 @@ authors.workspace = true
 [dependencies]
 dirs.workspace = true
 open.workspace = true
+trash.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+clipboard-win.workspace = true
 windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Registry",

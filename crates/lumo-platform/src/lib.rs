@@ -60,6 +60,149 @@ pub fn open_path(path: &Path) -> io::Result<()> {
     open::that_detached(path)
 }
 
+/// Shows the OS "Open with…" chooser for `path` (Windows only for now).
+pub fn open_with(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("rundll32.exe")
+            .arg("shell32.dll,OpenAs_RunDLL")
+            .arg(path)
+            .spawn()
+            .map(drop)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "\"Open with\" isn't available on this platform yet",
+        ))
+    }
+}
+
+/// Moves `paths` to the Recycle Bin (the trash on Linux).
+pub fn move_to_trash(paths: &[PathBuf]) -> io::Result<()> {
+    trash::delete_all(paths).map_err(io::Error::other)
+}
+
+/// Puts back items that were moved to the Recycle Bin from `paths` (the
+/// most recent deletion of each). Fails if one of them can't be found.
+pub fn restore_from_trash(paths: &[PathBuf]) -> io::Result<()> {
+    #[cfg(any(
+        windows,
+        all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        )
+    ))]
+    {
+        let trashed = trash::os_limited::list().map_err(io::Error::other)?;
+        let mut items = Vec::with_capacity(paths.len());
+        for path in paths {
+            let item = trashed
+                .iter()
+                .filter(|item| item.original_path() == *path)
+                .max_by_key(|item| item.time_deleted)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("{} is no longer in the Recycle Bin", path.display()),
+                    )
+                })?;
+            items.push(item.clone());
+        }
+        trash::os_limited::restore_all(items).map_err(io::Error::other)
+    }
+    #[cfg(not(any(
+        windows,
+        all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        )
+    )))]
+    {
+        let _ = paths;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "restoring from the trash isn't supported on this platform",
+        ))
+    }
+}
+
+/// Files on the clipboard, and whether they were cut (move) or copied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileClipboard {
+    pub paths: Vec<PathBuf>,
+    pub cut: bool,
+}
+
+/// Puts files on the clipboard. On Windows this is the system clipboard in
+/// Explorer's format, so pasting works in both directions.
+pub fn set_file_clipboard(paths: &[PathBuf], cut: bool) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        windows::set_file_clipboard(paths, cut)
+    }
+    #[cfg(not(windows))]
+    {
+        *fallback_clipboard() = Some(FileClipboard {
+            paths: paths.to_vec(),
+            cut,
+        });
+        Ok(())
+    }
+}
+
+/// The files currently on the clipboard, if any.
+pub fn file_clipboard() -> Option<FileClipboard> {
+    #[cfg(windows)]
+    {
+        windows::file_clipboard()
+    }
+    #[cfg(not(windows))]
+    {
+        fallback_clipboard().clone()
+    }
+}
+
+/// Text on the system clipboard (for text fields; see `lumo-ui`'s input hook).
+pub fn clipboard_text() -> Option<String> {
+    #[cfg(windows)]
+    {
+        clipboard_win::get_clipboard_string()
+            .ok()
+            .map(|text| text.replace("\r\n", "\n"))
+            .filter(|text| !text.is_empty())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Empties the file clipboard (after a cut has been pasted, like Explorer).
+pub fn clear_file_clipboard() {
+    #[cfg(windows)]
+    windows::clear_clipboard();
+    #[cfg(not(windows))]
+    {
+        *fallback_clipboard() = None;
+    }
+}
+
+/// In-process clipboard until Linux desktop clipboard support lands (Phase 4).
+#[cfg(not(windows))]
+fn fallback_clipboard() -> std::sync::MutexGuard<'static, Option<FileClipboard>> {
+    static CLIPBOARD: std::sync::Mutex<Option<FileClipboard>> = std::sync::Mutex::new(None);
+    CLIPBOARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The user's system accent color as RGB, where the OS has one (Windows).
 /// Not used yet: Lumo defaults to its own orange; a "follow system accent"
 /// preference will use this.
@@ -86,6 +229,43 @@ pub fn show_fatal_error(title: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trash_and_restore_round_trip() {
+        // A folder under the user's home: temp dirs on another volume may
+        // have no trash on Linux.
+        let dir = tempfile::tempdir_in(home_dir()).unwrap();
+        let file = dir
+            .path()
+            .join(format!("lumo-trash-test-{}.txt", std::process::id()));
+        std::fs::write(&file, "keep me").unwrap();
+
+        move_to_trash(std::slice::from_ref(&file)).unwrap();
+        assert!(!file.exists());
+
+        restore_from_trash(std::slice::from_ref(&file)).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
+    }
+
+    /// Touches the real system clipboard, so it doesn't run by default:
+    /// `cargo test -p lumo-platform -- --ignored clipboard`
+    #[test]
+    #[ignore = "overwrites the system clipboard"]
+    fn clipboard_round_trip_with_cut_flag() {
+        let paths = vec![std::env::temp_dir()];
+        set_file_clipboard(&paths, true).unwrap();
+        assert_eq!(
+            file_clipboard(),
+            Some(FileClipboard {
+                paths: paths.clone(),
+                cut: true
+            })
+        );
+        set_file_clipboard(&paths, false).unwrap();
+        assert!(!file_clipboard().unwrap().cut);
+        clear_file_clipboard();
+        assert_eq!(file_clipboard(), None);
+    }
 
     #[test]
     fn known_folders_exist_and_start_with_home() {

@@ -1,16 +1,20 @@
 //! Application state and behavior: tabs, actions, shortcuts, session saving.
 //! Drawing lives in `view.rs`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{
-    self, Context, Event, Key, KeyboardShortcut, Modifiers, PointerButton, ThemePreference,
+    self, Context, Event, Key, KeyboardShortcut, Modifiers, PointerButton, Pos2, Rect,
+    ThemePreference,
 };
 use lumo_core::EntryKind;
 use lumo_platform::KnownFolder;
 
 use crate::address::AddressBar;
+use crate::files::{Clipboard, Properties, Renaming, Toast, TrashBin, UndoEntry};
 use crate::icons::{self, FileKind, Icon};
+use crate::jobs::Job;
 use crate::listing::SortColumn;
 use crate::palette::{CommandPalette, ItemKind, PaletteItem};
 use crate::session::Session;
@@ -36,6 +40,10 @@ pub struct Config {
     pub start: Start,
     /// Where open tabs are saved; `None` disables saving and restoring.
     pub session_file: Option<PathBuf>,
+    /// Keep the clipboard and the Recycle Bin private to this window instead
+    /// of using the OS ones. For tests: they must never touch the user's
+    /// clipboard or fill their Recycle Bin.
+    pub isolated: bool,
 }
 
 /// Everything the UI can ask for. Views push actions; `apply` performs them
@@ -57,10 +65,22 @@ pub enum Action {
     PrevTab,
     NewWindow,
     Select(Option<usize>),
+    /// A click on a row, with the modifier keys that were held.
+    ClickRow {
+        row: usize,
+        ctrl: bool,
+        shift: bool,
+    },
+    /// The tick circle on a row: add or remove it from the selection.
+    ToggleRow(usize),
+    SelectAll,
+    ClearSelection,
     /// Open the row at this index (double-click).
     OpenRow(usize),
     OpenSelected,
-    MoveSelection(Move),
+    OpenSelectedInNewTab,
+    /// Arrow keys; `true` extends the selection (Shift).
+    MoveSelection(Move, bool),
     Sort(SortColumn),
     ToggleHidden,
     EditAddress,
@@ -68,6 +88,34 @@ pub enum Action {
     Reveal(usize),
     OpenPalette,
     SetTheme(ThemePreference),
+    /// Right-click: the search menu for `row` (or the folder background) at `pos`.
+    ContextMenu {
+        row: Option<usize>,
+        pos: Pos2,
+    },
+    /// Shift+F10: the search menu for the current selection.
+    ContextMenuForSelection,
+    Copy,
+    Cut,
+    Paste,
+    /// Move the selection to the Recycle Bin.
+    Trash,
+    /// Ask before deleting the selection permanently (Shift+Delete).
+    DeletePermanently,
+    ConfirmDelete,
+    CancelDelete,
+    Rename,
+    CommitRename,
+    CancelRename,
+    NewFolder,
+    NewFile,
+    OpenWith,
+    CopyPath,
+    Properties,
+    CloseProperties,
+    Undo,
+    DismissToast,
+    CancelJobs,
 }
 
 /// What the command palette's item list was built from.
@@ -80,6 +128,10 @@ pub(crate) struct PaletteKey {
     active: usize,
     show_hidden: bool,
     recent: usize,
+    menu: bool,
+    selected: usize,
+    focus: Option<usize>,
+    undo: usize,
 }
 
 pub struct LumoApp {
@@ -103,7 +155,22 @@ pub struct LumoApp {
     pub(crate) table_shown_for: Option<(u64, PathBuf)>,
     /// Palette items, rebuilt only when what they list changes.
     pub(crate) palette_cache: Option<(PaletteKey, Vec<PaletteItem>)>,
-    ctx: Context,
+    pub(crate) clipboard: Clipboard,
+    pub(crate) trash_bin: TrashBin,
+    /// Items cut to the clipboard (drawn dimmed until pasted).
+    pub(crate) cut_paths: HashSet<PathBuf>,
+    pub(crate) jobs: Vec<Job>,
+    pub(crate) undo: Vec<UndoEntry>,
+    pub(crate) toast: Option<Toast>,
+    pub(crate) renaming: Option<Renaming>,
+    /// A just-created item to rename once it shows up in the list.
+    pub(crate) rename_when_loaded: Option<PathBuf>,
+    /// Items waiting for "Delete permanently?" confirmation.
+    pub(crate) confirm_delete: Option<Vec<PathBuf>>,
+    pub(crate) properties: Option<Properties>,
+    /// Screen rect of the file list (for placing the tray, toasts and menus).
+    pub(crate) table_rect: Option<Rect>,
+    pub(crate) ctx: Context,
 }
 
 impl LumoApp {
@@ -157,6 +224,30 @@ impl LumoApp {
             title: String::new(),
             table_shown_for: None,
             palette_cache: None,
+            clipboard: if config.isolated {
+                Clipboard::Private(None)
+            } else {
+                Clipboard::System
+            },
+            // If the private bin can't be created, fall back to failing
+            // loudly rather than silently using the user's Recycle Bin.
+            trash_bin: if config.isolated {
+                TrashBin::private().unwrap_or(TrashBin::Folder {
+                    dir: PathBuf::from("<unavailable>"),
+                    origins: Default::default(),
+                })
+            } else {
+                TrashBin::System
+            },
+            cut_paths: HashSet::new(),
+            jobs: Vec::new(),
+            undo: Vec::new(),
+            toast: None,
+            renaming: None,
+            rename_when_loaded: None,
+            confirm_delete: None,
+            properties: None,
+            table_rect: None,
             ctx: cc.egui_ctx.clone(),
         }
     }
@@ -191,9 +282,32 @@ impl LumoApp {
         self.palette.is_open()
     }
 
-    /// True once the active tab has finished loading.
+    pub fn is_renaming(&self) -> bool {
+        self.renaming.is_some()
+    }
+
+    pub fn is_confirming_delete(&self) -> bool {
+        self.confirm_delete.is_some()
+    }
+
+    pub fn is_showing_properties(&self) -> bool {
+        self.properties.is_some()
+    }
+
+    pub fn toast_message(&self) -> Option<&str> {
+        self.toast.as_ref().map(|t| t.message.as_str())
+    }
+
+    /// True once the active tab has finished loading and no file job runs.
     pub fn is_idle(&self) -> bool {
-        self.active_tab().listing().is_some_and(|l| !l.is_loading())
+        self.jobs.is_empty()
+            && self.rename_when_loaded.is_none()
+            && self.active_tab().listing().is_some_and(|l| !l.is_loading())
+    }
+
+    /// A text field has the keyboard (address bar, palette, rename box).
+    pub(crate) fn text_input_active(&self) -> bool {
+        self.address.is_editing() || self.palette.is_open() || self.renaming.is_some()
     }
 
     /// Queues an action as if the user had triggered it; applied next frame.
@@ -203,7 +317,7 @@ impl LumoApp {
         self.ctx.request_repaint();
     }
 
-    fn active_tab_mut(&mut self) -> &mut Tab {
+    pub(crate) fn active_tab_mut(&mut self) -> &mut Tab {
         &mut self.tabs[self.active]
     }
 
@@ -222,7 +336,9 @@ impl LumoApp {
     }
 
     pub(crate) fn handle_input(&mut self, ctx: &Context) {
-        let editing = self.address.is_editing();
+        // Typing in a text field: only window-level shortcuts apply.
+        let editing = self.address.is_editing() || self.renaming.is_some();
+        let has_selection = self.active_tab().selection_count() > 0;
         let last_tab = self.tabs.len() - 1;
         let active = self.active;
         let mut actions = Vec::new();
@@ -263,6 +379,10 @@ impl LumoApp {
             }
             if shortcut(Modifiers::CTRL, Key::W) {
                 actions.push(Action::CloseTab(active));
+            }
+            // Ctrl+Shift+N must be checked before Ctrl+N (loose matching).
+            if shortcut(Modifiers::CTRL | Modifiers::SHIFT, Key::N) && !editing {
+                actions.push(Action::NewFolder);
             }
             if shortcut(Modifiers::CTRL, Key::N) {
                 actions.push(Action::NewWindow);
@@ -310,6 +430,46 @@ impl LumoApp {
             if editing {
                 return;
             }
+            // File actions. More specific combinations first (see above).
+            if shortcut(Modifiers::CTRL | Modifiers::SHIFT, Key::C) {
+                actions.push(Action::CopyPath);
+            }
+            if shortcut(Modifiers::CTRL, Key::C) {
+                actions.push(Action::Copy);
+            }
+            if shortcut(Modifiers::CTRL, Key::X) {
+                actions.push(Action::Cut);
+            }
+            if shortcut(Modifiers::CTRL, Key::V) {
+                actions.push(Action::Paste);
+            }
+            if shortcut(Modifiers::CTRL, Key::A) {
+                actions.push(Action::SelectAll);
+            }
+            if shortcut(Modifiers::CTRL, Key::Z) {
+                actions.push(Action::Undo);
+            }
+            if shortcut(Modifiers::SHIFT, Key::Delete) {
+                actions.push(Action::DeletePermanently);
+            }
+            if shortcut(Modifiers::NONE, Key::Delete) {
+                actions.push(Action::Trash);
+            }
+            if shortcut(Modifiers::NONE, Key::F2) {
+                actions.push(Action::Rename);
+            }
+            if shortcut(Modifiers::SHIFT, Key::F10) {
+                actions.push(Action::ContextMenuForSelection);
+            }
+            if shortcut(Modifiers::ALT, Key::Enter) {
+                actions.push(Action::Properties);
+            }
+            if shortcut(Modifiers::CTRL, Key::Enter) {
+                actions.push(Action::OpenSelectedInNewTab);
+            }
+            if has_selection && shortcut(Modifiers::NONE, Key::Escape) {
+                actions.push(Action::ClearSelection);
+            }
             let moves = [
                 (Key::ArrowUp, Move::Up),
                 (Key::ArrowDown, Move::Down),
@@ -319,8 +479,11 @@ impl LumoApp {
                 (Key::End, Move::End),
             ];
             for (key, movement) in moves {
+                if shortcut(Modifiers::SHIFT, key) {
+                    actions.push(Action::MoveSelection(movement, true));
+                }
                 if shortcut(Modifiers::NONE, key) {
-                    actions.push(Action::MoveSelection(movement));
+                    actions.push(Action::MoveSelection(movement, false));
                 }
             }
             if shortcut(Modifiers::NONE, Key::Enter) {
@@ -415,13 +578,33 @@ impl LumoApp {
                 }
             }
             Action::Select(row) => self.active_tab_mut().select(row),
-            Action::OpenRow(row) => self.open_row(row),
-            Action::OpenSelected => {
-                if let Some(row) = self.active_tab().selected() {
-                    self.open_row(row);
+            Action::ClickRow { row, ctrl, shift } => {
+                let tab = self.active_tab_mut();
+                match (ctrl, shift) {
+                    (_, true) => tab.extend_to(row),
+                    (true, false) => tab.toggle(row),
+                    (false, false) => tab.select_only(row),
                 }
             }
-            Action::MoveSelection(movement) => self.active_tab_mut().move_selection(movement),
+            Action::ToggleRow(row) => self.active_tab_mut().toggle(row),
+            Action::SelectAll => self.active_tab_mut().select_all(),
+            Action::ClearSelection => self.active_tab_mut().clear_selection(),
+            Action::OpenRow(row) => self.open_row(row),
+            Action::OpenSelected => self.open_selection(),
+            Action::OpenSelectedInNewTab => {
+                let folders: Vec<PathBuf> = self
+                    .active_tab()
+                    .selected_paths()
+                    .into_iter()
+                    .filter(|p| p.is_dir())
+                    .collect();
+                for folder in folders {
+                    self.apply(Action::OpenInNewTab(folder));
+                }
+            }
+            Action::MoveSelection(movement, extend) => {
+                self.active_tab_mut().move_selection(movement, extend);
+            }
             Action::Sort(column) => {
                 let tab = self.active_tab_mut();
                 tab.set_sort(tab.sort().toggled(column));
@@ -445,6 +628,41 @@ impl LumoApp {
                 }
             }
             Action::SetTheme(preference) => self.ctx.set_theme(preference),
+            Action::ContextMenu { row, pos } => {
+                let tab = self.active_tab_mut();
+                match row {
+                    // Right-clicking outside the selection acts on that row only.
+                    Some(row) if !tab.is_selected(row) => tab.select_only(row),
+                    Some(_) => {}
+                    None => tab.clear_selection(),
+                }
+                self.palette.open_menu(pos);
+            }
+            Action::ContextMenuForSelection => {
+                let pos = self.table_rect.map_or(Pos2::new(200.0, 160.0), |r| {
+                    r.left_top() + egui::vec2(48.0, 48.0)
+                });
+                self.palette.open_menu(pos);
+            }
+            Action::Copy => self.copy_selection(false),
+            Action::Cut => self.copy_selection(true),
+            Action::Paste => self.paste(),
+            Action::Trash => self.trash_selection(),
+            Action::DeletePermanently => self.ask_delete_permanently(),
+            Action::ConfirmDelete => self.delete_permanently(),
+            Action::CancelDelete => self.confirm_delete = None,
+            Action::Rename => self.start_rename(),
+            Action::CommitRename => self.commit_rename(),
+            Action::CancelRename => self.renaming = None,
+            Action::NewFolder => self.create(true),
+            Action::NewFile => self.create(false),
+            Action::OpenWith => self.open_with(),
+            Action::CopyPath => self.copy_paths(),
+            Action::Properties => self.show_properties(),
+            Action::CloseProperties => self.properties = None,
+            Action::Undo => self.undo_last(),
+            Action::DismissToast => self.toast = None,
+            Action::CancelJobs => self.cancel_jobs(),
         }
     }
 
@@ -459,7 +677,166 @@ impl LumoApp {
             active: self.active,
             show_hidden: self.show_hidden,
             recent: self.recent.len(),
+            menu: self.palette.is_menu(),
+            selected: tab.selection_count(),
+            focus: tab.selected(),
+            undo: self.undo.len(),
         }
+    }
+
+    /// Commands for files: on the selection if there is one, otherwise on
+    /// the folder itself (paste, new folder, …).
+    fn file_commands(&self) -> Vec<PaletteItem> {
+        let command = |title: &str, icon, shortcut, action| PaletteItem {
+            title: title.to_owned(),
+            detail: String::new(),
+            icon,
+            shortcut,
+            kind: ItemKind::Command,
+            action,
+        };
+        let tab = self.active_tab();
+        let count = tab.selection_count();
+        let mut items = Vec::new();
+        if count > 0 {
+            let single = (count == 1).then(|| tab.selected_row()).flatten();
+            let single_folder = single.is_some_and(|r| r.is_dir());
+            let single_file = single.is_some_and(|r| !r.is_dir());
+            items.push(command(
+                "Open",
+                Icon::ArrowRight,
+                Some("Enter"),
+                Action::OpenSelected,
+            ));
+            if single_folder {
+                items.push(command(
+                    "Open in new tab",
+                    Icon::Plus,
+                    Some("Ctrl+Enter"),
+                    Action::OpenSelectedInNewTab,
+                ));
+            }
+            if single_file {
+                items.push(command(
+                    "Open with…",
+                    Icon::ArrowRight,
+                    None,
+                    Action::OpenWith,
+                ));
+            }
+            items.push(command("Cut", Icon::Cut, Some("Ctrl+X"), Action::Cut));
+            items.push(command("Copy", Icon::Copy, Some("Ctrl+C"), Action::Copy));
+            if single.is_some() {
+                items.push(command("Rename", Icon::Rename, Some("F2"), Action::Rename));
+            }
+            items.push(command(
+                "Copy path",
+                Icon::Copy,
+                Some("Ctrl+Shift+C"),
+                Action::CopyPath,
+            ));
+            items.push(command(
+                "Move to Recycle Bin",
+                Icon::Trash,
+                Some("Del"),
+                Action::Trash,
+            ));
+            items.push(command(
+                "Delete permanently",
+                Icon::Trash,
+                Some("Shift+Del"),
+                Action::DeletePermanently,
+            ));
+            if single.is_some() {
+                items.push(command(
+                    "Properties",
+                    Icon::Info,
+                    Some("Alt+Enter"),
+                    Action::Properties,
+                ));
+            }
+            items.push(command(
+                "Select all",
+                Icon::Check,
+                Some("Ctrl+A"),
+                Action::SelectAll,
+            ));
+        } else {
+            if self.clipboard.get().is_some() {
+                items.push(command("Paste", Icon::Paste, Some("Ctrl+V"), Action::Paste));
+            }
+            items.push(command(
+                "New folder",
+                Icon::NewFolder,
+                Some("Ctrl+Shift+N"),
+                Action::NewFolder,
+            ));
+            items.push(command("New text file", Icon::Plus, None, Action::NewFile));
+            items.push(command(
+                "Select all",
+                Icon::Check,
+                Some("Ctrl+A"),
+                Action::SelectAll,
+            ));
+            items.push(command(
+                "Copy folder path",
+                Icon::Copy,
+                Some("Ctrl+Shift+C"),
+                Action::CopyPath,
+            ));
+            items.push(command(
+                "Folder properties",
+                Icon::Info,
+                Some("Alt+Enter"),
+                Action::Properties,
+            ));
+        }
+        if !self.undo.is_empty() {
+            items.push(command("Undo", Icon::Undo, Some("Ctrl+Z"), Action::Undo));
+        }
+        items
+    }
+
+    /// The right-click search menu: file commands plus view options when
+    /// clicking the folder background.
+    pub(crate) fn menu_items(&self) -> Vec<PaletteItem> {
+        let mut items = self.file_commands();
+        if self.active_tab().selection_count() == 0 {
+            let command = |title: &str, icon, shortcut, action| PaletteItem {
+                title: title.to_owned(),
+                detail: String::new(),
+                icon,
+                shortcut,
+                kind: ItemKind::Command,
+                action,
+            };
+            let hidden = if self.show_hidden {
+                "Hide hidden items"
+            } else {
+                "Show hidden items"
+            };
+            items.push(command(
+                "Refresh",
+                Icon::Refresh,
+                Some("F5"),
+                Action::Refresh,
+            ));
+            items.push(command(
+                hidden,
+                Icon::Eye,
+                Some("Ctrl+H"),
+                Action::ToggleHidden,
+            ));
+            for (title, column) in [
+                ("Sort by name", SortColumn::Name),
+                ("Sort by date modified", SortColumn::Modified),
+                ("Sort by type", SortColumn::Type),
+                ("Sort by size", SortColumn::Size),
+            ] {
+                items.push(command(title, Icon::SortDown, None, Action::Sort(column)));
+            }
+        }
+        items
     }
 
     /// Everything the command palette can offer right now, in a stable order
@@ -478,7 +855,8 @@ impl LumoApp {
         } else {
             "Show hidden items"
         };
-        let mut items = vec![
+        let mut items = self.file_commands();
+        items.extend([
             command("New tab", Icon::Plus, Some("Ctrl+T"), Action::NewTab),
             command(
                 "Close tab",
@@ -545,7 +923,7 @@ impl LumoApp {
                 None,
                 Action::SetTheme(ThemePreference::System),
             ),
-        ];
+        ]);
 
         let place = |title: String, path: &Path, icon, kind| PaletteItem {
             title,
@@ -636,7 +1014,7 @@ impl LumoApp {
         }
     }
 
-    fn open_row(&mut self, row: usize) {
+    pub(crate) fn open_row(&mut self, row: usize) {
         let tab = self.active_tab();
         let Some(entry) = tab.listing().and_then(|l| l.rows().get(row)) else {
             return;
@@ -713,7 +1091,10 @@ impl eframe::App for LumoApp {
         let ctx = ui.ctx().clone();
         self.handle_input(&ctx);
         self.apply_actions();
+        self.poll_jobs();
+        self.expire_toast();
         self.update_tabs();
+        self.start_pending_rename();
         self.draw(ui);
         if self.apply_actions() {
             self.update_tabs();
@@ -721,6 +1102,40 @@ impl eframe::App for LumoApp {
         }
         self.sync_title(&ctx);
         self.save_session_if_changed();
+    }
+
+    /// With eframe's clipboard shortcuts off (see `lib.rs`), Ctrl+C/X/V
+    /// reach us as plain keys, so file copy/paste works even when the
+    /// clipboard holds files rather than text. When a text field has the
+    /// keyboard, turn them back into egui's text clipboard events.
+    fn raw_input_hook(&mut self, _ctx: &Context, raw_input: &mut egui::RawInput) {
+        if !self.text_input_active() {
+            return;
+        }
+        for event in &mut raw_input.events {
+            let Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if !modifiers.command || modifiers.shift || modifiers.alt {
+                continue;
+            }
+            match key {
+                Key::C => *event = Event::Copy,
+                Key::X => *event = Event::Cut,
+                Key::V => {
+                    if let Some(text) = lumo_platform::clipboard_text() {
+                        *event = Event::Paste(text);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }
 

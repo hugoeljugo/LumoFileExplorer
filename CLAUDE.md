@@ -116,6 +116,10 @@ pub trait FileSystemProvider: Send + Sync {
 - **No icon glyphs from fonts** — draw icons in `lumo-ui/src/icons.rs`. Fonts differ per machine (Linux has no Segoe UI), and egui_kittest fails tests on any missing glyph.
 - **Views push `Action`s; `LumoApp::apply` mutates state** after drawing. Keep that split so behavior stays testable.
 - **Every user-facing feature gets command-palette entries** (`LumoApp::palette_items`), with its shortcut if it has one. The palette is how Lumo grows (Git, AI, archives, editor…).
+- **Shortcut matching is loose** (egui accepts extra Shift/Alt), so always check the more specific combination first: Ctrl+Shift+N before Ctrl+N, Shift+Delete before Delete. A missed ordering once made Ctrl+Shift+N open a new window.
+- **Clipboard keys are ours on Windows**: eframe's clipboard shortcuts are off (egui-winit drops Ctrl+V when the clipboard holds files); `LumoApp::raw_input_hook` hands Ctrl+C/X/V back to text fields. Keep both sides working when touching input.
+- **Tests must run `isolated: true`** — private clipboard and Recycle Bin. Never let a test write to the user's clipboard or bin.
+- **File operations never overwrite and are undoable**; anything slow runs as a `jobs::Job`. Undo of a create/copy goes to the Recycle Bin, not `remove_file`.
 - **UI tests use egui_kittest** (`crates/lumo-ui/tests/`). Simulate Ctrl as `common::CTRL` (ctrl + command), like winit does on Windows; plain `Modifiers::CTRL` misses text-edit shortcuts such as Ctrl+A.
 - **Anything slow runs off the UI thread** (folder loading uses a worker + bounded channel). Known exception: address-bar autocompletion lists one folder synchronously.
 - **Renderer is glow (OpenGL)**: measured ~0.5 s / ~75 MB vs wgpu's ~1.1 s / ~370 MB. Re-measure before switching.

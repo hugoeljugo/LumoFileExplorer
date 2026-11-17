@@ -43,9 +43,19 @@ to store state elsewhere. Lumo follows the system light/dark setting;
 | Keys | Action |
 |------|--------|
 | Ctrl+K or Ctrl+P | Command palette: fuzzy-search commands, tabs, places and files in this folder (`>` for commands only) |
+| Right-click, Shift+F10 | Search menu for the clicked item or folder |
+| Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste files (works with Explorer) |
+| Delete / Shift+Delete | Move to the Recycle Bin / delete permanently (asks first) |
+| F2 | Rename in place |
+| Ctrl+Shift+N | New folder |
+| Ctrl+Z | Undo the last file operation |
+| Ctrl+A, Ctrl/Shift+click, Shift+arrows | Select several items |
+| Ctrl+Shift+C | Copy path |
+| Alt+Enter | Properties |
 | Ctrl+T / Ctrl+W | New tab / close tab |
 | Ctrl+Tab / Ctrl+Shift+Tab, Ctrl+1…9 | Switch tabs |
 | Ctrl+N | New window |
+| Ctrl+Enter | Open the selected folder in a new tab |
 | Alt+Left / Alt+Right / Backspace, mouse back/forward | Back / forward |
 | Alt+Up | Parent folder |
 | Ctrl+L / Alt+D / F4 | Edit the address (Tab accepts a suggestion) |

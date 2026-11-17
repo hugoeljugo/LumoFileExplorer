@@ -3,9 +3,11 @@
 mod address;
 mod app;
 mod complete;
+mod files;
 mod format;
 mod fuzzy;
 mod icons;
+mod jobs;
 mod listing;
 mod nav;
 mod palette;
@@ -30,6 +32,7 @@ pub fn run(start: Start) -> eframe::Result {
     let config = Config {
         start,
         session_file: data_dir.as_ref().map(|dir| dir.join("session.json")),
+        isolated: false,
     };
     let options = eframe::NativeOptions {
         // OpenGL via glow: measured on Windows 11 it opens the window in
@@ -41,6 +44,10 @@ pub fn run(start: Start) -> eframe::Result {
             .with_inner_size([1100.0, 700.0])
             .with_min_inner_size([520.0, 320.0]),
         persistence_path: data_dir,
+        // On Windows Lumo reads the clipboard itself, so Ctrl+V works when it
+        // holds files (egui-winit only reports text pastes). See
+        // `LumoApp::raw_input_hook`.
+        clipboard_shortcuts: !cfg!(windows),
         ..Default::default()
     };
     eframe::run_native(
