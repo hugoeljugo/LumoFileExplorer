@@ -1,5 +1,6 @@
 //! The Lumo window, built on egui.
 
+mod about;
 mod address;
 mod app;
 mod bin;
@@ -18,6 +19,7 @@ mod theme;
 mod view;
 mod watch;
 
+pub use about::install_crash_handler;
 pub use app::{APP_ID, Action, Config, LumoApp, Start};
 pub use listing::{Listing, LoadState, Row, SortColumn, SortOrder};
 pub use session::Session;
@@ -25,12 +27,17 @@ pub use tab::{Move, Tab};
 
 use eframe::egui;
 
+/// Where settings, open tabs and crash reports live. `LUMO_DATA_DIR`
+/// relocates it (tests, portable installs).
+pub fn data_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("LUMO_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| eframe::storage_dir(APP_ID))
+}
+
 /// Opens the main window and blocks until it closes.
 pub fn run(start: Start) -> eframe::Result {
-    // LUMO_DATA_DIR relocates all saved state (tests, portable installs).
-    let data_dir = std::env::var_os("LUMO_DATA_DIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| eframe::storage_dir(APP_ID));
+    let data_dir = data_dir();
     let config = Config {
         start,
         session_file: data_dir.as_ref().map(|dir| dir.join("session.json")),

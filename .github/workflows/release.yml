@@ -1,0 +1,58 @@
+name: Release
+
+# Pushing a tag like `v0.1.0-alpha.1` tests, builds and publishes a GitHub
+# Release with `lumo.exe`, a zip (exe + licenses + tester notes) and checksums.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches the crate version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} doesn't match Cargo.toml version $version"
+          }
+
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo build --release --locked -p lumo-ui -p lumo-cli
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $dir = "Lumo-$tag-windows-x64"
+          New-Item -ItemType Directory "$dir/licenses" | Out-Null
+          Copy-Item target/release/lumo.exe, target/release/lumo-cli.exe, TESTERS.md $dir
+          Copy-Item LICENSE "$dir/licenses/Lumo-MIT.txt"
+          Copy-Item crates/lumo-ui/assets/fonts/*.txt "$dir/licenses/"
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+          Copy-Item target/release/lumo.exe "Lumo-$tag.exe"
+          Get-FileHash "$dir.zip", "Lumo-$tag.exe" -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content SHA256SUMS.txt
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $flags = @()
+          if ($tag.Contains("-")) { $flags += "--prerelease" }
+          gh release create $tag `
+            "Lumo-$tag-windows-x64.zip" "Lumo-$tag.exe" SHA256SUMS.txt `
+            --title "Lumo $tag" --notes-file TESTERS.md @flags

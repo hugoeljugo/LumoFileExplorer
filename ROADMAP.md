@@ -168,6 +168,7 @@ Design (chosen to feel like Lumo, not Explorer):
 - [x] Right-click **search menu** (and Shift+F10): the palette at the cursor with only the commands that fit — selection commands on items, Paste/New/Sort/View on empty space
 - [x] Open with… (Windows chooser), Open in new tab (Ctrl+Enter), Copy path (Ctrl+Shift+C), Properties (Alt+Enter)
 - [x] All new commands in the command palette, with shortcuts
+- [x] **Alpha readiness** (v0.1.0-alpha.1): static C runtime (single self-contained `lumo.exe`), local crash reports + dialog, About window (version, build commit, Windows version, licenses), "Report a problem" (pre-filled GitHub issue, user-initiated), issue templates, tag-triggered release workflow, `TESTERS.md`
 - [x] **Recycle Bin view**: "Recycle Bin" in Quick access (icon shows empty/full), also reachable by typing "Recycle Bin" or `shell:RecycleBinFolder` in the address bar. It shows Windows' real Recycle Bin (all drives merged): name, date deleted, original location, size. Restore (never overwrites), Delete permanently (asks), Empty Recycle Bin (asks); file operations that need a real folder are disabled there. Refreshes when opened, after Lumo's own deletes and on F5 (Windows sends no change notifications for the bin).
 
 ### Dependencies

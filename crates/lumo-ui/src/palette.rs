@@ -73,6 +73,13 @@ impl CommandPalette {
         };
     }
 
+    /// Opens with `query` already typed (keys pressed in the same frame as
+    /// Ctrl+K would otherwise be lost).
+    pub fn open_with_query(&mut self, query: String) {
+        self.open();
+        self.query = query;
+    }
+
     /// Opens as the right-click search menu at `pos`.
     pub fn open_menu(&mut self, pos: Pos2) {
         self.open();

@@ -1974,7 +1974,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "lumo-cli"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1984,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "lumo-core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "criterion",
  "rayon",
@@ -1995,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "lumo-platform"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "clipboard-win",
  "dirs",
@@ -2007,7 +2007,7 @@ dependencies = [
 
 [[package]]
 name = "lumo-ui"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "chrono",
  "eframe",

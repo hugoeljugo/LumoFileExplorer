@@ -1,0 +1,4 @@
+# Link Microsoft's C runtime statically, so `lumo.exe` runs on PCs without the
+# Visual C++ Redistributable installed (fresh Windows installs).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -9,7 +9,9 @@ use std::path::PathBuf;
 
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Storage::FileSystem::GetLogicalDrives;
-use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
 /// The user's accent color from `HKCU\Software\Microsoft\Windows\DWM\AccentColor`
@@ -91,6 +93,49 @@ pub(crate) fn file_clipboard() -> Option<crate::FileClipboard> {
 pub(crate) fn clear_clipboard() {
     if let Ok(_clipboard) = open_clipboard() {
         let _ = clipboard_win::raw::empty();
+    }
+}
+
+fn registry_string(root: HKEY, subkey: &str, value: &str) -> Option<String> {
+    let subkey = wide(subkey);
+    let value = wide(value);
+    let mut buffer = [0u16; 256];
+    let mut size = std::mem::size_of_val(&buffer) as u32;
+    // SAFETY: subkey/value are NUL-terminated UTF-16 buffers alive for the
+    // call; `buffer` is writable and `size` holds its length in bytes.
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            subkey.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &raw mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    Some(String::from_utf16_lossy(&buffer[..len]))
+}
+
+/// e.g. "Windows 11 24H2 (build 26200)". The registry's product name says
+/// "Windows 10" on Windows 11 too, so the build number decides.
+pub(crate) fn os_description() -> String {
+    const KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+    let build = registry_string(HKEY_LOCAL_MACHINE, KEY, "CurrentBuildNumber");
+    let release = registry_string(HKEY_LOCAL_MACHINE, KEY, "DisplayVersion");
+    let name = match build.as_deref().and_then(|b| b.parse::<u32>().ok()) {
+        Some(b) if b >= 22000 => "Windows 11",
+        Some(_) => "Windows 10",
+        None => "Windows",
+    };
+    match (release, build) {
+        (Some(release), Some(build)) => format!("{name} {release} (build {build})"),
+        (None, Some(build)) => format!("{name} (build {build})"),
+        _ => name.to_owned(),
     }
 }
 

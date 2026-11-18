@@ -42,6 +42,8 @@ pub enum Icon {
     Check,
     NewFolder,
     Undo,
+    /// Speech bubble: feedback / report a problem.
+    Feedback,
     // Line icons: places.
     Home,
     Desktop,
@@ -238,6 +240,20 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             ]);
             g.line((12.0, 9.5), (12.0, 15.0));
             g.line((9.3, 12.25), (14.7, 12.25));
+        }
+        Icon::Feedback => {
+            g.polyline_at(&[
+                (2.0, 3.0),
+                (14.0, 3.0),
+                (14.0, 11.0),
+                (7.5, 11.0),
+                (4.5, 14.0),
+                (4.5, 11.0),
+                (2.0, 11.0),
+                (2.0, 3.0),
+            ]);
+            g.line((5.0, 6.0), (11.0, 6.0));
+            g.line((5.0, 8.5), (9.0, 8.5));
         }
         Icon::Undo => {
             let points = g.arc((9.0, 9.5), 4.5, -FRAC_PI_2, FRAC_PI_2);

@@ -494,3 +494,41 @@ fn palette_escape_and_toggle_close_without_acting() {
     assert!(!h.state().is_palette_open());
     assert_eq!(h.state().tabs().len(), 1);
 }
+
+#[test]
+fn about_shows_the_version_and_licenses() {
+    let dir = tree(&[]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+
+    palette_query(&mut h, "about lumo");
+    h.key_press(Key::Enter);
+    h.run();
+    assert!(h.state().is_showing_about());
+    h.get_by_label_contains(env!("CARGO_PKG_VERSION"));
+    h.get_by_label("Report a problem");
+
+    h.get_by_label("Licenses").click();
+    h.run();
+    h.get_by_label("Lilex font — SIL Open Font License 1.1");
+}
+
+#[test]
+fn typing_in_the_same_frame_as_ctrl_k_goes_to_the_palette() {
+    let dir = tree(&["about-me.txt", "zzz.txt"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+
+    h.key_press_modifiers(CTRL, Key::K);
+    h.event(Event::Text("about lumo".into()));
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+
+    assert!(h.state().is_showing_about());
+    assert_eq!(
+        selected_name(&h),
+        None,
+        "type-ahead didn't take the letters"
+    );
+}

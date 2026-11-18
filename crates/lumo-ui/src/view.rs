@@ -97,6 +97,7 @@ impl LumoApp {
         self.toast_view(&ctx, &p);
         self.delete_confirmation(&ctx, &p);
         self.properties_window(&ctx, &p);
+        self.about_window(&ctx, &p);
     }
 
     fn tab_strip(&mut self, ui: &mut Ui, p: &Palette) {
@@ -834,7 +835,7 @@ impl LumoApp {
 }
 
 /// Elevated floating surface: tray, toast, dialogs.
-fn overlay_frame(p: &Palette) -> Frame {
+pub(crate) fn overlay_frame(p: &Palette) -> Frame {
     Frame::new()
         .fill(p.elevated)
         .stroke(Stroke::new(1.0, p.border))

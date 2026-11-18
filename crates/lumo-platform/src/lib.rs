@@ -60,6 +60,23 @@ pub fn open_path(path: &Path) -> io::Result<()> {
     open::that_detached(path)
 }
 
+/// Opens a web address in the default browser (always user-initiated).
+pub fn open_url(url: &str) -> io::Result<()> {
+    open::that_detached(url)
+}
+
+/// The operating system and version, for bug reports.
+pub fn os_description() -> String {
+    #[cfg(windows)]
+    {
+        windows::os_description()
+    }
+    #[cfg(not(windows))]
+    {
+        format!("{} {}", std::env::consts::OS, std::env::consts::ARCH)
+    }
+}
+
 /// Shows the OS "Open with…" chooser for `path` (Windows only for now).
 pub fn open_with(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
@@ -449,6 +466,14 @@ mod tests {
         if let Some(first) = folders.first() {
             assert_eq!(first.label, "Home");
         }
+    }
+
+    #[test]
+    fn os_description_names_the_system() {
+        let description = os_description();
+        assert!(!description.is_empty());
+        #[cfg(windows)]
+        assert!(description.starts_with("Windows"), "{description}");
     }
 
     #[test]

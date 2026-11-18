@@ -88,6 +88,8 @@ pub enum Action {
     /// Select the row at this index and scroll it into view.
     Reveal(usize),
     OpenPalette,
+    /// Open the palette with this text already typed.
+    OpenPaletteWith(String),
     SetTheme(ThemePreference),
     /// Right-click: the search menu for `row` (or the folder background) at `pos`.
     ContextMenu {
@@ -121,6 +123,11 @@ pub enum Action {
     RestoreSelected,
     /// Ask, then permanently delete everything in the Recycle Bin.
     EmptyBin,
+    About,
+    CloseAbout,
+    /// Open a pre-filled GitHub issue in the browser.
+    ReportProblem,
+    OpenUrl(String),
 }
 
 /// What the command palette's item list was built from.
@@ -180,6 +187,7 @@ pub struct LumoApp {
     pub(crate) table_rect: Option<Rect>,
     /// Live updates for folders open in tabs.
     watcher: FolderWatcher,
+    pub(crate) show_about: bool,
     pub(crate) ctx: Context,
 }
 
@@ -260,6 +268,7 @@ impl LumoApp {
             bin_count_rx: None,
             properties: None,
             table_rect: None,
+            show_about: false,
             watcher: {
                 let ctx = cc.egui_ctx.clone();
                 FolderWatcher::new(move || ctx.request_repaint())
@@ -320,6 +329,18 @@ impl LumoApp {
     /// True once the active tab has finished loading and no file job runs.
     pub fn is_idle(&self) -> bool {
         self.jobs.is_empty() && self.rename_when_loaded.is_none() && !self.active_tab().is_loading()
+    }
+
+    pub fn is_showing_about(&self) -> bool {
+        self.show_about
+    }
+
+    /// Where settings, open tabs and crash reports live (`None` in tests).
+    pub(crate) fn data_dir(&self) -> Option<PathBuf> {
+        self.session_file
+            .as_deref()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
     }
 
     /// A text field has the keyboard (address bar, palette, rename box).
@@ -400,8 +421,21 @@ impl LumoApp {
         ctx.input_mut(|i| {
             let palette_key = i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::K))
                 || i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::P));
-            if palette_key {
-                actions.push(Action::OpenPalette); // toggles
+            if palette_key && palette_open {
+                actions.push(Action::OpenPalette); // toggles it closed
+            } else if palette_key {
+                // Letters typed in the same frame as Ctrl+K (fast typists,
+                // macro tools) belong to the palette, not to type-ahead.
+                let typed: String = i
+                    .events
+                    .iter()
+                    .filter_map(|e| match e {
+                        Event::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                actions.push(Action::OpenPaletteWith(typed));
+                return;
             }
             // While the palette is open it owns the keyboard: it handles
             // Escape, arrows and Enter itself.
@@ -704,6 +738,7 @@ impl LumoApp {
                     self.palette.open();
                 }
             }
+            Action::OpenPaletteWith(query) => self.palette.open_with_query(query),
             Action::SetTheme(preference) => self.ctx.set_theme(preference),
             Action::ContextMenu { row, pos } => {
                 let tab = self.active_tab_mut();
@@ -730,6 +765,17 @@ impl LumoApp {
             Action::CancelDelete => self.confirm = None,
             Action::RestoreSelected => self.restore_selected(),
             Action::EmptyBin => self.ask_empty_bin(),
+            Action::About => self.show_about = true,
+            Action::CloseAbout => self.show_about = false,
+            Action::ReportProblem => {
+                let url = crate::about::report_url(&lumo_platform::os_description());
+                self.apply(Action::OpenUrl(url));
+            }
+            Action::OpenUrl(url) => {
+                if let Err(err) = lumo_platform::open_url(&url) {
+                    self.toast_error(format!("Couldn't open the browser: {err}"));
+                }
+            }
             Action::Rename => self.start_rename(),
             Action::CommitRename => self.commit_rename(),
             Action::CancelRename => self.renaming = None,
@@ -1082,6 +1128,13 @@ impl LumoApp {
                 Action::EmptyBin,
             ));
         }
+        items.push(command("About Lumo", Icon::Info, None, Action::About));
+        items.push(command(
+            "Report a problem or give feedback",
+            Icon::Feedback,
+            None,
+            Action::ReportProblem,
+        ));
         for drive in &self.drives {
             items.push(place(
                 drive.display().to_string(),

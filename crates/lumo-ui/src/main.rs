@@ -8,6 +8,7 @@ use std::process::ExitCode;
 use lumo_ui::Start;
 
 fn main() -> ExitCode {
+    lumo_ui::install_crash_handler(lumo_ui::data_dir());
     // `lumo [PATH]`: open one tab at PATH; with no argument, restore the last session.
     let start = match std::env::args_os().nth(1) {
         Some(arg) => match std::path::absolute(&arg) {
