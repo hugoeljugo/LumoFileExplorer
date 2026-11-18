@@ -35,7 +35,11 @@ impl AddressBar {
 
     pub fn start_editing(&mut self, current: &Path) {
         self.editing = true;
-        self.text = current.display().to_string();
+        self.text = if crate::bin::is_bin(current) {
+            crate::bin::TITLE.to_owned()
+        } else {
+            current.display().to_string()
+        };
         self.suggestions.clear();
         self.highlighted = None;
         self.request_focus = true;
@@ -241,6 +245,9 @@ impl AddressBar {
 
 /// `(label, path)` for each ancestor of `path`, root first.
 fn breadcrumbs(path: &Path) -> Vec<(String, PathBuf)> {
+    if crate::bin::is_bin(path) {
+        return vec![(crate::bin::TITLE.to_owned(), path.to_path_buf())];
+    }
     let mut crumbs: Vec<_> = path
         .ancestors()
         .filter(|p| !p.as_os_str().is_empty())

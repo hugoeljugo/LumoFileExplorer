@@ -176,6 +176,122 @@ pub fn restore_from_trash(paths: &[PathBuf]) -> io::Result<()> {
     }
 }
 
+/// An item sitting in the Recycle Bin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashedItem {
+    /// Opaque, system-specific id used to restore or purge this item.
+    pub id: std::ffi::OsString,
+    pub name: std::ffi::OsString,
+    /// The folder it was deleted from.
+    pub original_parent: PathBuf,
+    pub deleted: Option<std::time::SystemTime>,
+    /// Size in bytes (files only).
+    pub size: Option<u64>,
+    pub is_dir: bool,
+}
+
+#[cfg(any(
+    windows,
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+))]
+mod bin {
+    use super::*;
+    use std::ffi::OsString;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    /// Everything in the Recycle Bin (all drives, merged like Explorer shows it).
+    pub fn list_trash() -> io::Result<Vec<TrashedItem>> {
+        let items = trash::os_limited::list().map_err(io::Error::other)?;
+        Ok(items
+            .into_iter()
+            .map(|item| {
+                let size = trash::os_limited::metadata(&item).ok().map(|m| m.size);
+                TrashedItem {
+                    deleted: u64::try_from(item.time_deleted)
+                        .ok()
+                        .map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
+                    size: size.and_then(|s| s.size()),
+                    is_dir: size.is_some_and(|s| s.entries().is_some()),
+                    id: item.id,
+                    name: item.name,
+                    original_parent: item.original_parent,
+                }
+            })
+            .collect())
+    }
+
+    fn select(ids: &[OsString]) -> io::Result<Vec<trash::TrashItem>> {
+        let items: Vec<_> = trash::os_limited::list()
+            .map_err(io::Error::other)?
+            .into_iter()
+            .filter(|item| ids.contains(&item.id))
+            .collect();
+        if items.len() < ids.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "some items are no longer in the Recycle Bin",
+            ));
+        }
+        Ok(items)
+    }
+
+    /// Puts the given items back where they were deleted from. Fails (and
+    /// restores nothing) if something already exists at a destination.
+    pub fn restore_trashed(ids: &[OsString]) -> io::Result<()> {
+        trash::os_limited::restore_all(select(ids)?).map_err(|err| match err {
+            trash::Error::RestoreCollision { path, .. } => io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} already exists", path.display()),
+            ),
+            other => io::Error::other(other),
+        })
+    }
+
+    /// Deletes the given items from the Recycle Bin for good.
+    pub fn purge_trashed(ids: &[OsString]) -> io::Result<()> {
+        trash::os_limited::purge_all(select(ids)?).map_err(io::Error::other)
+    }
+}
+
+#[cfg(not(any(
+    windows,
+    all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    )
+)))]
+mod bin {
+    use super::*;
+
+    fn unsupported() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "the Recycle Bin isn't supported on this platform yet",
+        )
+    }
+
+    pub fn list_trash() -> io::Result<Vec<TrashedItem>> {
+        Err(unsupported())
+    }
+
+    pub fn restore_trashed(_: &[std::ffi::OsString]) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    pub fn purge_trashed(_: &[std::ffi::OsString]) -> io::Result<()> {
+        Err(unsupported())
+    }
+}
+
+pub use bin::{list_trash, purge_trashed, restore_trashed};
+
 /// Files on the clipboard, and whether they were cut (move) or copied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileClipboard {
@@ -292,6 +408,15 @@ mod tests {
             eprintln!("no Recycle Bin for this account; restore not exercised");
             return;
         }
+
+        let listed = list_trash()
+            .unwrap()
+            .into_iter()
+            .find(|item| same_path(&item.original_parent.join(&item.name), &file))
+            .expect("trashed file is listed");
+        assert_eq!(listed.size, Some(7));
+        assert!(!listed.is_dir);
+        assert!(listed.deleted.is_some());
 
         restore_from_trash(std::slice::from_ref(&file)).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");

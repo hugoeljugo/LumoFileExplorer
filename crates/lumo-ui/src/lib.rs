@@ -2,6 +2,7 @@
 
 mod address;
 mod app;
+mod bin;
 mod complete;
 mod files;
 mod format;

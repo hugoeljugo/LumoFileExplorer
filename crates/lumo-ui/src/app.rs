@@ -12,7 +12,7 @@ use lumo_core::EntryKind;
 use lumo_platform::KnownFolder;
 
 use crate::address::AddressBar;
-use crate::files::{Clipboard, Properties, Renaming, Toast, TrashBin, UndoEntry};
+use crate::files::{Clipboard, Confirm, Properties, Renaming, Toast, TrashBin, UndoEntry};
 use crate::icons::{self, FileKind, Icon};
 use crate::jobs::Job;
 use crate::listing::SortColumn;
@@ -117,6 +117,10 @@ pub enum Action {
     Undo,
     DismissToast,
     CancelJobs,
+    /// Recycle Bin view: put the selected items back.
+    RestoreSelected,
+    /// Ask, then permanently delete everything in the Recycle Bin.
+    EmptyBin,
 }
 
 /// What the command palette's item list was built from.
@@ -166,8 +170,11 @@ pub struct LumoApp {
     pub(crate) renaming: Option<Renaming>,
     /// A just-created item to rename once it shows up in the list.
     pub(crate) rename_when_loaded: Option<PathBuf>,
-    /// Items waiting for "Delete permanently?" confirmation.
-    pub(crate) confirm_delete: Option<Vec<PathBuf>>,
+    /// An irreversible operation waiting for confirmation.
+    pub(crate) confirm: Option<Confirm>,
+    /// Items in the Recycle Bin (`None` until counted); drives the sidebar icon.
+    pub(crate) bin_count: Option<usize>,
+    pub(crate) bin_count_rx: Option<std::sync::mpsc::Receiver<usize>>,
     pub(crate) properties: Option<Properties>,
     /// Screen rect of the file list (for placing the tray, toasts and menus).
     pub(crate) table_rect: Option<Rect>,
@@ -192,7 +199,7 @@ impl LumoApp {
                 let tabs: Vec<Tab> = session
                     .tabs
                     .into_iter()
-                    .filter(|p| p.is_dir())
+                    .filter(|p| p.is_dir() || crate::bin::is_bin(p))
                     .map(Tab::new)
                     .collect();
                 let active = tabs
@@ -209,7 +216,7 @@ impl LumoApp {
             tabs
         };
 
-        Self {
+        let mut app = Self {
             recent: tabs.iter().map(|t| t.path().to_path_buf()).collect(),
             tabs,
             active,
@@ -248,7 +255,9 @@ impl LumoApp {
             toast: None,
             renaming: None,
             rename_when_loaded: None,
-            confirm_delete: None,
+            confirm: None,
+            bin_count: None,
+            bin_count_rx: None,
             properties: None,
             table_rect: None,
             watcher: {
@@ -256,7 +265,9 @@ impl LumoApp {
                 FolderWatcher::new(move || ctx.request_repaint())
             },
             ctx: cc.egui_ctx.clone(),
-        }
+        };
+        app.recount_bin();
+        app
     }
 
     // ---- read-only accessors (used by tests and the view) ----
@@ -293,8 +304,9 @@ impl LumoApp {
         self.renaming.is_some()
     }
 
-    pub fn is_confirming_delete(&self) -> bool {
-        self.confirm_delete.is_some()
+    /// An irreversible operation is waiting for "Delete" / "Cancel".
+    pub fn is_confirming(&self) -> bool {
+        self.confirm.is_some()
     }
 
     pub fn is_showing_properties(&self) -> bool {
@@ -331,8 +343,13 @@ impl LumoApp {
     /// Keeps the watcher on the folders open in tabs and reloads any that
     /// changed outside Lumo.
     pub(crate) fn apply_folder_changes(&mut self) {
-        self.watcher
-            .sync(self.tabs.iter().map(|t| t.path().to_path_buf()).collect());
+        self.watcher.sync(
+            self.tabs
+                .iter()
+                .map(|t| t.path().to_path_buf())
+                .filter(|p| !crate::bin::is_bin(p))
+                .collect(),
+        );
         let (settled, settling) = self.watcher.take_settled();
         if settling {
             self.ctx.request_repaint_after(watch::SETTLE);
@@ -354,11 +371,19 @@ impl LumoApp {
         let ctx = self.ctx.clone();
         let show_hidden = self.show_hidden;
         let active = &mut self.tabs[self.active];
-        active.ensure_loaded(move || ctx.request_repaint());
+        active.ensure_loaded(move || ctx.request_repaint(), &self.trash_bin);
         for tab in &mut self.tabs {
             tab.poll();
         }
         self.tabs[self.active].update_view(show_hidden);
+        // Viewing the bin is a free recount for the sidebar icon.
+        let tab = &self.tabs[self.active];
+        if crate::bin::is_bin(tab.path())
+            && !tab.is_loading()
+            && let Some(listing) = tab.listing()
+        {
+            self.bin_count = Some(listing.rows().len());
+        }
     }
 
     pub(crate) fn handle_input(&mut self, ctx: &Context) {
@@ -550,6 +575,32 @@ impl LumoApp {
     }
 
     fn apply(&mut self, action: Action) {
+        // Things that only make sense for real folders.
+        if self.in_bin() {
+            match action {
+                Action::Copy
+                | Action::Cut
+                | Action::Paste
+                | Action::Rename
+                | Action::NewFolder
+                | Action::NewFile
+                | Action::OpenWith
+                | Action::CopyPath
+                | Action::Properties
+                | Action::OpenRow(_)
+                | Action::OpenSelected
+                | Action::OpenSelectedInNewTab => {
+                    self.toast("Restore items to use them (Recycle Bin)", false);
+                    return;
+                }
+                // Delete in the bin means "delete for good", which asks first.
+                Action::Trash => {
+                    self.ask_delete_permanently();
+                    return;
+                }
+                _ => {}
+            }
+        }
         match action {
             Action::Navigate(path) => {
                 self.status = None;
@@ -675,8 +726,10 @@ impl LumoApp {
             Action::Paste => self.paste(),
             Action::Trash => self.trash_selection(),
             Action::DeletePermanently => self.ask_delete_permanently(),
-            Action::ConfirmDelete => self.delete_permanently(),
-            Action::CancelDelete => self.confirm_delete = None,
+            Action::ConfirmDelete => self.confirmed(),
+            Action::CancelDelete => self.confirm = None,
+            Action::RestoreSelected => self.restore_selected(),
+            Action::EmptyBin => self.ask_empty_bin(),
             Action::Rename => self.start_rename(),
             Action::CommitRename => self.commit_rename(),
             Action::CancelRename => self.renaming = None,
@@ -724,6 +777,39 @@ impl LumoApp {
         let tab = self.active_tab();
         let count = tab.selection_count();
         let mut items = Vec::new();
+        if crate::bin::is_bin(tab.path()) {
+            if count > 0 {
+                items.push(command(
+                    "Restore",
+                    Icon::Undo,
+                    None,
+                    Action::RestoreSelected,
+                ));
+                items.push(command(
+                    "Delete permanently",
+                    Icon::Trash,
+                    Some("Del"),
+                    Action::DeletePermanently,
+                ));
+            } else if self.bin_count != Some(0) {
+                items.push(command(
+                    "Empty Recycle Bin",
+                    Icon::Trash,
+                    None,
+                    Action::EmptyBin,
+                ));
+            }
+            items.push(command(
+                "Select all",
+                Icon::Check,
+                Some("Ctrl+A"),
+                Action::SelectAll,
+            ));
+            if !self.undo.is_empty() {
+                items.push(command("Undo", Icon::Undo, Some("Ctrl+Z"), Action::Undo));
+            }
+            return items;
+        }
         if count > 0 {
             let single = (count == 1).then(|| tab.selected_row()).flatten();
             let single_folder = single.is_some_and(|r| r.is_dir());
@@ -980,6 +1066,22 @@ impl LumoApp {
                 ItemKind::Place,
             ));
         }
+        items.push(PaletteItem {
+            title: crate::bin::TITLE.to_owned(),
+            detail: "Deleted items".to_owned(),
+            icon: Icon::Trash,
+            shortcut: None,
+            kind: ItemKind::Place,
+            action: Action::Navigate(crate::bin::path()),
+        });
+        if !crate::bin::is_bin(self.active_tab().path()) {
+            items.push(command(
+                "Empty Recycle Bin",
+                Icon::Trash,
+                None,
+                Action::EmptyBin,
+            ));
+        }
         for drive in &self.drives {
             items.push(place(
                 drive.display().to_string(),
@@ -1065,6 +1167,10 @@ impl LumoApp {
     }
 
     fn open_typed(&mut self, text: &str) {
+        if let Some(bin) = crate::bin::parse_typed(text) {
+            self.apply(Action::Navigate(bin));
+            return;
+        }
         let Some(path) = resolve_typed(text, self.active_tab().path()) else {
             return;
         };
@@ -1118,6 +1224,7 @@ impl eframe::App for LumoApp {
         self.handle_input(&ctx);
         self.apply_actions();
         self.poll_jobs();
+        self.poll_bin_count();
         self.expire_toast();
         self.apply_folder_changes();
         self.update_tabs();

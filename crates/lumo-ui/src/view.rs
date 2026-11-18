@@ -167,13 +167,7 @@ impl LumoApp {
                     history.can_go_forward(),
                     Action::Forward,
                 ),
-                (
-                    Icon::ArrowUp,
-                    "Up",
-                    "Alt+Up",
-                    tab.path().parent().is_some(),
-                    Action::Up,
-                ),
+                (Icon::ArrowUp, "Up", "Alt+Up", tab.can_go_up(), Action::Up),
                 (Icon::Refresh, "Refresh", "F5", true, Action::Refresh),
             ];
             for (icon, name, key, enabled, action) in buttons {
@@ -231,6 +225,20 @@ impl LumoApp {
                     &mut self.actions,
                 );
             }
+            let bin_icon = if self.bin_count.is_some_and(|n| n > 0) {
+                Icon::TrashFull
+            } else {
+                Icon::Trash
+            };
+            nav_item(
+                ui,
+                p,
+                bin_icon,
+                crate::bin::TITLE,
+                &crate::bin::path(),
+                &current,
+                &mut self.actions,
+            );
             ui.add_space(12.0);
             section_header(ui, p, "DRIVES");
             for drive in &self.drives {
@@ -282,7 +290,12 @@ impl LumoApp {
                     ui.spinner();
                 }
                 LoadState::Done => {
-                    ui.label(RichText::new("This folder is empty.").color(p.text_secondary));
+                    let empty = if crate::bin::is_bin(tab.path()) {
+                        "The Recycle Bin is empty."
+                    } else {
+                        "This folder is empty."
+                    };
+                    ui.label(RichText::new(empty).color(p.text_secondary));
                 }
             });
             return;
@@ -332,10 +345,19 @@ impl LumoApp {
             table = table.vertical_scroll_offset(offset);
         }
 
+        // In the Recycle Bin the date and type columns hold the deletion
+        // time and the original location.
+        let in_bin = crate::bin::is_bin(&folder);
         let columns = [
             (SortColumn::Name, "Name"),
-            (SortColumn::Modified, "Modified"),
-            (SortColumn::Type, "Type"),
+            (
+                SortColumn::Modified,
+                if in_bin { "Deleted" } else { "Modified" },
+            ),
+            (
+                SortColumn::Type,
+                if in_bin { "Original location" } else { "Type" },
+            ),
             (SortColumn::Size, "Size"),
         ];
         let output = table
@@ -558,6 +580,7 @@ impl LumoApp {
             return;
         };
         let size = crate::format::size(tab.selected_size());
+        let in_bin = crate::bin::is_bin(tab.path());
         let mut actions = Vec::new();
         Area::new(Id::unique("lumo-selection-tray"))
             .order(Order::Foreground)
@@ -570,20 +593,39 @@ impl LumoApp {
                         ui.label(RichText::new(format!("{count} selected")).color(p.text));
                         ui.label(RichText::new(format!("· {size}")).color(p.text_secondary));
                         ui.add_space(10.0);
-                        let buttons = [
-                            (Icon::Copy, "Copy", "Ctrl+C", Action::Copy),
-                            (Icon::Cut, "Cut", "Ctrl+X", Action::Cut),
-                            (Icon::Trash, "Move to Recycle Bin", "Del", Action::Trash),
-                            (
-                                Icon::Search,
-                                "More actions",
-                                "Shift+F10",
-                                Action::ContextMenuForSelection,
-                            ),
-                        ];
+                        let more = (
+                            Icon::Search,
+                            "More actions",
+                            "Shift+F10",
+                            Action::ContextMenuForSelection,
+                        );
+                        let buttons = if in_bin {
+                            vec![
+                                (Icon::Undo, "Restore", "", Action::RestoreSelected),
+                                (
+                                    Icon::Trash,
+                                    "Delete permanently",
+                                    "Del",
+                                    Action::DeletePermanently,
+                                ),
+                                more,
+                            ]
+                        } else {
+                            vec![
+                                (Icon::Copy, "Copy", "Ctrl+C", Action::Copy),
+                                (Icon::Cut, "Cut", "Ctrl+X", Action::Cut),
+                                (Icon::Trash, "Move to Recycle Bin", "Del", Action::Trash),
+                                more,
+                            ]
+                        };
                         for (icon, name, key, action) in buttons {
+                            let hint = if key.is_empty() {
+                                name.to_owned()
+                            } else {
+                                format!("{name} ({key})")
+                            };
                             if icons::button(ui, p, icon, name, 28.0, true, false)
-                                .on_hover_text(format!("{name} ({key})"))
+                                .on_hover_text(hint)
                                 .clicked()
                             {
                                 actions.push(action);
@@ -652,38 +694,75 @@ impl LumoApp {
         self.actions.extend(actions);
     }
 
-    /// "Delete permanently?" — the one operation that asks first.
+    /// "This can't be undone" — the only operations that ask first.
     fn delete_confirmation(&mut self, ctx: &Context, p: &Palette) {
-        let Some(paths) = &self.confirm_delete else {
+        let Some(confirm) = &self.confirm else {
             return;
         };
-        let what = match paths.as_slice() {
-            [one] => format!(
-                "\"{}\"",
-                one.file_name()
-                    .map(|n| n.to_string_lossy())
-                    .unwrap_or_default()
+        let items = |n: usize| {
+            if n == 1 {
+                "1 item".to_owned()
+            } else {
+                format!("{n} items")
+            }
+        };
+        let (title, body, button) = match confirm {
+            crate::files::Confirm::DeletePaths(paths) => {
+                let what = match paths.as_slice() {
+                    [one] => format!(
+                        "\"{}\"",
+                        one.file_name()
+                            .map(|n| n.to_string_lossy())
+                            .unwrap_or_default()
+                    ),
+                    many => items(many.len()),
+                };
+                (
+                    "Delete permanently?",
+                    format!(
+                        "{what} will be deleted without going to the Recycle Bin. This can't be undone."
+                    ),
+                    "Delete",
+                )
+            }
+            crate::files::Confirm::PurgeItems(ids) => (
+                "Delete permanently?",
+                format!(
+                    "{} will be removed from the Recycle Bin for good. This can't be undone.",
+                    items(ids.len())
+                ),
+                "Delete permanently",
             ),
-            many => format!("{} items", many.len()),
+            crate::files::Confirm::EmptyBin => (
+                "Empty the Recycle Bin?",
+                match self.bin_count {
+                    Some(n) => format!(
+                        "{} will be deleted for good. This can't be undone.",
+                        items(n)
+                    ),
+                    None => "Everything in it will be deleted for good. This can't be undone."
+                        .to_owned(),
+                },
+                "Empty Recycle Bin",
+            ),
         };
         let mut actions = Vec::new();
         let modal = Modal::new(Id::unique("lumo-confirm-delete"))
             .frame(overlay_frame(p).inner_margin(Margin::same(18)))
             .show(ctx, |ui| {
                 ui.set_max_width(360.0);
-                ui.label(RichText::new("Delete permanently?").font(theme::semibold(16.0)).color(p.text));
-                ui.add_space(6.0);
                 ui.label(
-                    RichText::new(format!(
-                        "{what} will be deleted without going to the Recycle Bin. This can't be undone."
-                    ))
-                    .color(p.text_secondary),
+                    RichText::new(title)
+                        .font(theme::semibold(16.0))
+                        .color(p.text),
                 );
+                ui.add_space(6.0);
+                ui.label(RichText::new(body).color(p.text_secondary));
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
                     let danger = ctx.global_style().visuals.error_fg_color;
                     if ui
-                        .add(Button::new(RichText::new("Delete").color(Color32::WHITE)).fill(danger))
+                        .add(Button::new(RichText::new(button).color(Color32::WHITE)).fill(danger))
                         .clicked()
                     {
                         actions.push(Action::ConfirmDelete);

@@ -1,6 +1,7 @@
 //! A directory's contents as shown in the file table, loaded in the background.
 
 use std::cmp::Ordering;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
 use std::thread;
@@ -8,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use lumo_core::{Entry, EntryKind, FsError, ScanOptions, natural_cmp};
 
+use crate::files::TrashBin;
 use crate::format;
+use lumo_platform::TrashedItem;
 
 /// While a large directory is still loading, re-sort at most this often.
 const RESORT_INTERVAL: Duration = Duration::from_millis(200);
@@ -19,9 +22,13 @@ const RESORT_INTERVAL: Duration = Duration::from_millis(200);
 pub struct Row {
     pub entry: Entry,
     pub name: String,
+    /// Type column; in the Recycle Bin, the folder it was deleted from.
     pub type_label: String,
     pub size_label: String,
+    /// Date column; in the Recycle Bin, when it was deleted.
     pub date_label: String,
+    /// Recycle Bin id (only for rows in the Recycle Bin view).
+    pub trash_id: Option<OsString>,
 }
 
 impl Row {
@@ -32,6 +39,31 @@ impl Row {
             size_label: format::size_label(&entry),
             date_label: format::modified(entry.modified),
             entry,
+            trash_id: None,
+        }
+    }
+
+    /// A Recycle Bin item. Sorting by "date" sorts by deletion time and by
+    /// "type" by original location, matching the columns shown.
+    pub fn from_trashed(item: TrashedItem) -> Self {
+        let entry = Entry {
+            name: item.name,
+            kind: if item.is_dir {
+                EntryKind::Directory
+            } else {
+                EntryKind::File
+            },
+            size: item.size.unwrap_or(0),
+            modified: item.deleted,
+            hidden: false,
+        };
+        Self {
+            name: entry.name.to_string_lossy().into_owned(),
+            type_label: item.original_parent.display().to_string(),
+            size_label: format::size_label(&entry),
+            date_label: format::modified(entry.modified),
+            entry,
+            trash_id: Some(item.id),
         }
     }
 
@@ -117,11 +149,38 @@ impl Listing {
     /// Starts loading `path` on a background thread. `repaint` is called
     /// (from that thread) whenever new rows are ready.
     pub fn load(path: PathBuf, repaint: impl Fn() + Send + 'static) -> Self {
+        Self::spawn(move |tx| load_worker(&path, tx, &repaint))
+    }
+
+    /// Loads the Recycle Bin's contents instead of a folder.
+    pub(crate) fn load_bin(bin: TrashBin, repaint: impl Fn() + Send + 'static) -> Self {
+        Self::spawn(move |tx| {
+            let msg = match bin.list() {
+                Ok(items) => LoadMsg::Batch {
+                    rows: items.into_iter().map(Row::from_trashed).collect(),
+                    unreadable: 0,
+                },
+                Err(source) => LoadMsg::Failed(FsError::Io {
+                    path: PathBuf::from(crate::bin::TITLE),
+                    source,
+                }),
+            };
+            let failed = matches!(msg, LoadMsg::Failed(_));
+            // A send error just means the listing was dropped.
+            let _ = tx.send(msg);
+            if !failed {
+                let _ = tx.send(LoadMsg::Done);
+            }
+            repaint();
+        })
+    }
+
+    fn spawn(work: impl FnOnce(&SyncSender<LoadMsg>) + Send + 'static) -> Self {
         // Bounded: if the UI stops polling, the loader waits instead of piling up rows.
         let (tx, rx) = mpsc::sync_channel(4);
         let spawned = thread::Builder::new()
             .name("lumo-load".into())
-            .spawn(move || load_worker(&path, &tx, &repaint));
+            .spawn(move || work(&tx));
         let (state, rx) = match spawned {
             Ok(_) => (LoadState::Loading, Some(rx)),
             Err(source) => (

@@ -3,11 +3,13 @@
 //! take a while runs as a background [`Job`].
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::SystemTime;
 
 use lumo_core::ops::{self, TransferMode};
-use lumo_platform::FileClipboard;
+use lumo_platform::{FileClipboard, TrashedItem};
 
 use crate::app::LumoApp;
 use crate::format;
@@ -102,10 +104,11 @@ impl Clipboard {
 pub(crate) enum TrashBin {
     /// The OS Recycle Bin / trash.
     System,
-    /// A private folder (tests); remembers where each item came from.
+    /// A private folder (tests); remembers where each item came from and
+    /// when it was deleted, keyed by original path.
     Folder {
         dir: PathBuf,
-        origins: Arc<Mutex<HashMap<PathBuf, PathBuf>>>,
+        origins: Arc<Mutex<HashMap<PathBuf, (PathBuf, SystemTime)>>>,
     },
 }
 
@@ -126,9 +129,9 @@ impl TrashBin {
             Self::Folder { dir, origins } => {
                 let mut origins = origins.lock().unwrap_or_else(PoisonError::into_inner);
                 for path in paths {
-                    let slot = dir.join(format!("{}-{}", origins.len(), file_name(path)));
+                    let slot = dir.join(ops::unique_name(dir, &file_name(path)));
                     std::fs::rename(path, &slot)?;
-                    origins.insert(path.clone(), slot);
+                    origins.insert(path.clone(), (slot, SystemTime::now()));
                 }
                 Ok(true)
             }
@@ -141,7 +144,7 @@ impl TrashBin {
             Self::Folder { origins, .. } => {
                 let mut origins = origins.lock().unwrap_or_else(PoisonError::into_inner);
                 for path in paths {
-                    let slot = origins.remove(path).ok_or_else(|| {
+                    let (slot, _) = origins.remove(path).ok_or_else(|| {
                         std::io::Error::new(std::io::ErrorKind::NotFound, "not in the trash")
                     })?;
                     std::fs::rename(slot, path)?;
@@ -150,6 +153,89 @@ impl TrashBin {
             }
         }
     }
+
+    /// What's in the bin, for the Recycle Bin view.
+    pub(crate) fn list(&self) -> std::io::Result<Vec<TrashedItem>> {
+        match self {
+            Self::System => lumo_platform::list_trash(),
+            Self::Folder { origins, .. } => {
+                let origins = origins.lock().unwrap_or_else(PoisonError::into_inner);
+                Ok(origins
+                    .iter()
+                    .map(|(original, (slot, deleted))| {
+                        let meta = std::fs::symlink_metadata(slot).ok();
+                        TrashedItem {
+                            id: slot.clone().into_os_string(),
+                            name: original.file_name().map(Into::into).unwrap_or_default(),
+                            original_parent: parent_of(original),
+                            deleted: Some(*deleted),
+                            size: meta.as_ref().filter(|m| m.is_file()).map(|m| m.len()),
+                            is_dir: meta.is_some_and(|m| m.is_dir()),
+                        }
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    /// Puts items (by bin id) back where they came from; never overwrites.
+    /// Returns their restored paths.
+    pub(crate) fn restore_ids(&self, ids: &[OsString]) -> std::io::Result<Vec<PathBuf>> {
+        let wanted: Vec<TrashedItem> = self
+            .list()?
+            .into_iter()
+            .filter(|item| ids.contains(&item.id))
+            .collect();
+        let originals: Vec<PathBuf> = wanted
+            .iter()
+            .map(|item| item.original_parent.join(&item.name))
+            .collect();
+        match self {
+            Self::System => lumo_platform::restore_trashed(ids)?,
+            Self::Folder { .. } => {
+                if let Some(taken) = originals.iter().find(|p| p.exists()) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        format!("{} already exists", taken.display()),
+                    ));
+                }
+                self.restore(&originals)?;
+            }
+        }
+        Ok(originals)
+    }
+
+    /// Deletes items (by bin id) for good.
+    pub(crate) fn purge_ids(&self, ids: &[OsString]) -> std::io::Result<()> {
+        match self {
+            Self::System => lumo_platform::purge_trashed(ids),
+            Self::Folder { origins, .. } => {
+                let mut origins = origins.lock().unwrap_or_else(PoisonError::into_inner);
+                origins.retain(|_, (slot, _)| {
+                    if !ids.contains(&slot.clone().into_os_string()) {
+                        return true;
+                    }
+                    let removed = if slot.is_dir() {
+                        std::fs::remove_dir_all(&*slot)
+                    } else {
+                        std::fs::remove_file(&*slot)
+                    };
+                    removed.is_err()
+                });
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Something that needs a "this can't be undone" confirmation.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Confirm {
+    /// Shift+Delete on files.
+    DeletePaths(Vec<PathBuf>),
+    /// Delete selected items from the Recycle Bin.
+    PurgeItems(Vec<OsString>),
+    EmptyBin,
 }
 
 /// Details shown in the Properties panel.
@@ -264,18 +350,76 @@ impl LumoApp {
         }
     }
 
-    /// Shift+Delete: asks first (the only operation that does).
+    /// Shift+Delete (and Delete inside the Recycle Bin): asks first. The
+    /// only operations that ask are the ones that can't be undone.
     pub(crate) fn ask_delete_permanently(&mut self) {
+        if self.in_bin() {
+            let ids = self.active_tab().selected_trash_ids();
+            if !ids.is_empty() {
+                self.confirm = Some(Confirm::PurgeItems(ids));
+            }
+            return;
+        }
         let paths = self.active_tab().selected_paths();
         if !paths.is_empty() {
-            self.confirm_delete = Some(paths);
+            self.confirm = Some(Confirm::DeletePaths(paths));
         }
     }
 
-    pub(crate) fn delete_permanently(&mut self) {
-        if let Some(paths) = self.confirm_delete.take() {
-            let job = jobs::delete(paths, self.repaint_fn());
+    pub(crate) fn ask_empty_bin(&mut self) {
+        self.confirm = Some(Confirm::EmptyBin);
+    }
+
+    /// Runs whatever was just confirmed.
+    pub(crate) fn confirmed(&mut self) {
+        let repaint = self.repaint_fn();
+        let job = match self.confirm.take() {
+            Some(Confirm::DeletePaths(paths)) => jobs::delete(paths, repaint),
+            Some(Confirm::PurgeItems(ids)) => jobs::purge(ids, self.trash_bin.clone(), repaint),
+            Some(Confirm::EmptyBin) => jobs::empty_bin(self.trash_bin.clone(), repaint),
+            None => return,
+        };
+        self.jobs.push(job);
+    }
+
+    /// Restores the items selected in the Recycle Bin view.
+    pub(crate) fn restore_selected(&mut self) {
+        let ids = self.active_tab().selected_trash_ids();
+        if !ids.is_empty() {
+            let job = jobs::restore_items(ids, self.trash_bin.clone(), self.repaint_fn());
             self.jobs.push(job);
+        }
+    }
+
+    /// The active tab shows the Recycle Bin.
+    pub(crate) fn in_bin(&self) -> bool {
+        crate::bin::is_bin(self.active_tab().path())
+    }
+
+    /// Recounts the Recycle Bin in the background (for the sidebar icon).
+    pub(crate) fn recount_bin(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let bin = self.trash_bin.clone();
+        let repaint = self.repaint_fn();
+        let spawned = std::thread::Builder::new()
+            .name("lumo-bin-count".into())
+            .spawn(move || {
+                if let Ok(items) = bin.list() {
+                    let _ = tx.send(items.len());
+                    repaint();
+                }
+            });
+        if spawned.is_ok() {
+            self.bin_count_rx = Some(rx);
+        }
+    }
+
+    pub(crate) fn poll_bin_count(&mut self) {
+        if let Some(rx) = &self.bin_count_rx
+            && let Ok(count) = rx.try_recv()
+        {
+            self.bin_count = Some(count);
+            self.bin_count_rx = None;
         }
     }
 
@@ -533,7 +677,9 @@ impl LumoApp {
                 }
             }
             JobOutcome::Trashed { paths, recoverable } => {
-                let folders: Vec<PathBuf> = paths.iter().map(|p| parent_of(p)).collect();
+                let mut folders: Vec<PathBuf> = paths.iter().map(|p| parent_of(p)).collect();
+                folders.push(crate::bin::path());
+                self.recount_bin();
                 self.refresh_folders(&folders, None);
                 let n = paths.len();
                 if !recoverable {
@@ -550,7 +696,9 @@ impl LumoApp {
                 }
             }
             JobOutcome::Restored { paths } => {
-                let folders: Vec<PathBuf> = paths.iter().map(|p| parent_of(p)).collect();
+                let mut folders: Vec<PathBuf> = paths.iter().map(|p| parent_of(p)).collect();
+                folders.push(crate::bin::path());
+                self.recount_bin();
                 self.refresh_folders(&folders, Some(paths.clone()));
                 self.toast(format!("Restored {}", items(paths.len())), false);
             }
@@ -558,6 +706,11 @@ impl LumoApp {
                 let folders: Vec<PathBuf> = paths.iter().map(|p| parent_of(p)).collect();
                 self.refresh_folders(&folders, None);
                 self.toast(format!("Deleted {} permanently", items(paths.len())), false);
+            }
+            JobOutcome::Purged { count } => {
+                self.refresh_folders(&[crate::bin::path()], None);
+                self.recount_bin();
+                self.toast(format!("Deleted {} permanently", items(count)), false);
             }
             JobOutcome::MovedBack { pairs } => {
                 let mut folders: Vec<PathBuf> = pairs.iter().map(|(c, _)| parent_of(c)).collect();

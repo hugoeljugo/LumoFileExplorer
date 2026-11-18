@@ -1,9 +1,11 @@
 //! One browser-style tab: a location, its history, and its loaded listing.
 
 use std::collections::{BTreeSet, HashMap};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::files::TrashBin;
 use crate::listing::{Listing, Row, SortOrder};
 use crate::nav::History;
 
@@ -123,6 +125,9 @@ impl Tab {
     }
 
     pub fn up(&mut self) -> bool {
+        if !self.can_go_up() {
+            return false;
+        }
         match self.path().parent() {
             Some(parent) => {
                 self.navigate(parent.to_path_buf());
@@ -170,13 +175,40 @@ impl Tab {
     }
 
     /// Starts loading if this tab has no listing yet, or a requested reload.
-    pub fn ensure_loaded(&mut self, repaint: impl Fn() + Send + Clone + 'static) {
+    pub(crate) fn ensure_loaded(
+        &mut self,
+        repaint: impl Fn() + Send + Clone + 'static,
+        bin: &TrashBin,
+    ) {
+        let load = |path: &Path| {
+            if crate::bin::is_bin(path) {
+                Listing::load_bin(bin.clone(), repaint.clone())
+            } else {
+                Listing::load(path.to_path_buf(), repaint.clone())
+            }
+        };
         if self.listing.is_none() {
-            self.listing = Some(Listing::load(self.path().to_path_buf(), repaint));
+            self.listing = Some(load(self.path()));
             self.view_stale = true;
         } else if std::mem::take(&mut self.refresh_requested) {
-            self.next_listing = Some(Listing::load(self.path().to_path_buf(), repaint));
+            self.next_listing = Some(load(self.path()));
         }
+    }
+
+    /// Up is meaningful only for real folders that have a parent.
+    pub fn can_go_up(&self) -> bool {
+        !crate::bin::is_bin(self.path()) && self.path().parent().is_some()
+    }
+
+    /// Recycle Bin ids of the selected rows (Recycle Bin view only).
+    pub fn selected_trash_ids(&self) -> Vec<OsString> {
+        let Some(listing) = &self.listing else {
+            return Vec::new();
+        };
+        self.selected_rows()
+            .into_iter()
+            .filter_map(|row| listing.rows()[row].trash_id.clone())
+            .collect()
     }
 
     /// Takes newly loaded rows, and swaps in a finished reload. Cheap enough
@@ -427,6 +459,9 @@ impl Tab {
 }
 
 pub fn title_for(path: &Path) -> String {
+    if crate::bin::is_bin(path) {
+        return crate::bin::TITLE.to_owned();
+    }
     match path.file_name() {
         Some(name) => name.to_string_lossy().into_owned(),
         None => path.display().to_string(),
@@ -440,10 +475,10 @@ mod tests {
     use std::time::{Duration, Instant};
 
     fn settle(tab: &mut Tab) {
-        tab.ensure_loaded(|| {});
+        tab.ensure_loaded(|| {}, &TrashBin::System);
         let deadline = Instant::now() + Duration::from_secs(10);
         while tab.is_loading() {
-            tab.ensure_loaded(|| {});
+            tab.ensure_loaded(|| {}, &TrashBin::System);
             assert!(Instant::now() < deadline, "load timed out");
             tab.poll();
             std::thread::sleep(Duration::from_millis(1));

@@ -60,6 +60,7 @@ to store state elsewhere. Lumo follows the system light/dark setting;
 | Alt+Up | Parent folder |
 | Ctrl+L / Alt+D / F4 | Edit the address (Tab accepts a suggestion) |
 | F5 | Refresh |
+| (sidebar) Recycle Bin, or type "Recycle Bin" in the address bar | Browse, restore or permanently delete deleted items |
 | Ctrl+H | Show hidden items |
 | Arrows, PageUp/PageDown, Home/End, typing | Select; Enter opens |
 

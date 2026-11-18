@@ -228,7 +228,7 @@ fn shift_delete_asks_first() {
     h.run();
     h.key_press_modifiers(Modifiers::SHIFT, Key::Delete);
     h.run();
-    assert!(h.state().is_confirming_delete());
+    assert!(h.state().is_confirming());
     h.get_by_label("Cancel").click();
     h.run();
     assert!(dir.path().join("gone.txt").exists());
@@ -358,4 +358,142 @@ fn changes_made_outside_lumo_show_up_and_keep_the_selection() {
         common::visible_names(h) == ["downloaded.zip", "keep.txt"]
     });
     assert_eq!(selected(&h), ["keep.txt"], "selection survives the reload");
+}
+
+/// Deletes `names` (selected with Ctrl+click) from the current folder.
+fn delete_files(h: &mut egui_kittest::Harness<'_, lumo_ui::LumoApp>, names: &[&str]) {
+    for (i, name) in names.iter().enumerate() {
+        let modifiers = if i == 0 { Modifiers::NONE } else { CTRL };
+        h.get_by_label(name).click_modifiers(modifiers);
+        h.run();
+    }
+    h.key_press(Key::Delete);
+    settle(h);
+}
+
+fn open_bin(h: &mut egui_kittest::Harness<'_, lumo_ui::LumoApp>) {
+    h.get_by_label("Recycle Bin").click();
+    settle(h);
+}
+
+#[test]
+fn deleted_files_show_in_the_bin_and_restore_from_there() {
+    let dir = tree(&["report.pdf", "keep.txt"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+    delete_files(&mut h, &["report.pdf"]);
+
+    open_bin(&mut h);
+    assert_eq!(common::visible_names(&h), ["report.pdf"]);
+    h.get_by_label("Original location");
+    h.get_by_label(&dir.path().display().to_string());
+
+    h.get_by_label("report.pdf").click_secondary();
+    h.run();
+    h.event(Event::Text("restore".into()));
+    h.run();
+    h.key_press(Key::Enter);
+    settle(&mut h);
+
+    assert!(dir.path().join("report.pdf").exists());
+    h.get_by_label("The Recycle Bin is empty.");
+}
+
+#[test]
+fn deleting_inside_the_bin_asks_then_purges() {
+    let dir = tree(&["old.log"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+    delete_files(&mut h, &["old.log"]);
+    open_bin(&mut h);
+
+    h.get_by_label("old.log").click();
+    h.run();
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().is_confirming());
+    h.get_by_label("Delete permanently").click();
+    settle(&mut h);
+
+    h.get_by_label("The Recycle Bin is empty.");
+    assert!(!dir.path().join("old.log").exists());
+    assert_eq!(
+        h.state().toast_message(),
+        Some("Deleted 1 item permanently")
+    );
+}
+
+#[test]
+fn empty_the_bin_from_the_menu() {
+    let dir = tree(&["a.txt", "b.txt"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+    delete_files(&mut h, &["a.txt", "b.txt"]);
+    open_bin(&mut h);
+    assert_eq!(common::visible_names(&h).len(), 2);
+
+    h.get_by_label("File list").click_secondary();
+    h.run();
+    h.event(Event::Text("empty".into()));
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
+    h.get_by_label("Empty Recycle Bin").click();
+    settle(&mut h);
+
+    h.get_by_label("The Recycle Bin is empty.");
+}
+
+#[test]
+fn restore_never_overwrites() {
+    let dir = tree(&["notes.txt"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+    delete_files(&mut h, &["notes.txt"]);
+    fs::write(dir.path().join("notes.txt"), "newer").unwrap();
+    open_bin(&mut h);
+
+    h.get_by_label("notes.txt").click();
+    h.run();
+    h.state_mut().queue(Action::RestoreSelected);
+    settle(&mut h);
+
+    assert_eq!(
+        fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
+        "newer"
+    );
+    assert!(
+        h.state()
+            .toast_message()
+            .is_some_and(|m| m.contains("already exists"))
+    );
+    assert_eq!(common::visible_names(&h), ["notes.txt"], "still in the bin");
+}
+
+#[test]
+fn bin_is_reachable_by_typing_and_blocks_file_operations() {
+    let dir = tree(&["a.txt"]);
+    let mut h = harness(at(dir.path()));
+    settle(&mut h);
+
+    h.key_press_modifiers(CTRL, Key::L);
+    h.run();
+    h.key_press_modifiers(CTRL, Key::A);
+    h.event(Event::Text("Recycle Bin".into()));
+    h.key_press(Key::Enter);
+    settle(&mut h);
+    assert_eq!(h.state().active_tab().title(), "Recycle Bin");
+    assert!(!h.state().active_tab().can_go_up());
+
+    h.key_press_modifiers(CTRL | Modifiers::SHIFT, Key::N);
+    h.run();
+    assert!(
+        h.state()
+            .toast_message()
+            .is_some_and(|m| m.contains("Recycle Bin"))
+    );
+
+    h.key_press(Key::Backspace);
+    settle(&mut h);
+    assert_eq!(active_path(&h), dir.path());
 }

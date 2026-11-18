@@ -35,6 +35,10 @@ pub enum JobOutcome {
     Deleted {
         paths: Vec<PathBuf>,
     },
+    /// Items removed from the Recycle Bin for good.
+    Purged {
+        count: usize,
+    },
     /// Undo of a move: each `(current, original)` pair was moved back.
     MovedBack {
         pairs: Vec<(PathBuf, PathBuf)>,
@@ -175,6 +179,57 @@ pub fn restore(paths: Vec<PathBuf>, bin: TrashBin, repaint: impl Fn() + Send + '
         Box::new(move |_| {
             bin.restore(&paths).map_err(|e| e.to_string())?;
             Ok(JobOutcome::Restored { paths })
+        }),
+    )
+}
+
+/// Restores Recycle Bin items (by id) to where they came from.
+pub fn restore_items(
+    ids: Vec<std::ffi::OsString>,
+    bin: TrashBin,
+    repaint: impl Fn() + Send + 'static,
+) -> Job {
+    let label = format!("Restoring {}", items(ids.len()));
+    Job::spawn(
+        label,
+        repaint,
+        Box::new(move |_| {
+            let paths = bin.restore_ids(&ids).map_err(|e| e.to_string())?;
+            Ok(JobOutcome::Restored { paths })
+        }),
+    )
+}
+
+pub fn purge(
+    ids: Vec<std::ffi::OsString>,
+    bin: TrashBin,
+    repaint: impl Fn() + Send + 'static,
+) -> Job {
+    let label = format!("Deleting {} permanently", items(ids.len()));
+    Job::spawn(
+        label,
+        repaint,
+        Box::new(move |_| {
+            let count = ids.len();
+            bin.purge_ids(&ids).map_err(|e| e.to_string())?;
+            Ok(JobOutcome::Purged { count })
+        }),
+    )
+}
+
+pub fn empty_bin(bin: TrashBin, repaint: impl Fn() + Send + 'static) -> Job {
+    Job::spawn(
+        "Emptying the Recycle Bin".to_owned(),
+        repaint,
+        Box::new(move |_| {
+            let ids: Vec<_> = bin
+                .list()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .map(|i| i.id)
+                .collect();
+            bin.purge_ids(&ids).map_err(|e| e.to_string())?;
+            Ok(JobOutcome::Purged { count: ids.len() })
         }),
     )
 }

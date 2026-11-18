@@ -36,6 +36,8 @@ pub enum Icon {
     Paste,
     Rename,
     Trash,
+    /// The Recycle Bin with something in it.
+    TrashFull,
     Info,
     Check,
     NewFolder,
@@ -202,6 +204,14 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
                 (2.5, 13.5),
             ]);
             g.line((9.5, 4.0), (12.0, 6.5));
+        }
+        Icon::TrashFull => {
+            // The bin, with a crumpled page sticking out.
+            g.polyline_at(&[(3.5, 6.0), (4.5, 14.0), (11.5, 14.0), (12.5, 6.0)]);
+            g.line((2.0, 6.0), (14.0, 6.0));
+            g.polyline_at(&[(5.0, 6.0), (6.0, 1.8), (11.0, 3.2), (10.5, 6.0)]);
+            g.line((6.8, 8.5), (6.8, 11.5));
+            g.line((9.2, 8.5), (9.2, 11.5));
         }
         Icon::Trash => {
             g.line((2.0, 4.0), (14.0, 4.0));
