@@ -15,6 +15,7 @@ mod session;
 mod tab;
 mod theme;
 mod view;
+mod watch;
 
 pub use app::{APP_ID, Action, Config, LumoApp, Start};
 pub use listing::{Listing, LoadState, Row, SortColumn, SortOrder};

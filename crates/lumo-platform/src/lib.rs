@@ -81,8 +81,51 @@ pub fn open_with(path: &Path) -> io::Result<()> {
 }
 
 /// Moves `paths` to the Recycle Bin (the trash on Linux).
-pub fn move_to_trash(paths: &[PathBuf]) -> io::Result<()> {
-    trash::delete_all(paths).map_err(io::Error::other)
+///
+/// Returns whether every item can be restored. Windows deletes permanently
+/// when a drive or account has no Recycle Bin (network shares, some USB
+/// drives, the bin turned off, service accounts), so callers must not offer
+/// "Undo" when this is `false`.
+pub fn move_to_trash(paths: &[PathBuf]) -> io::Result<bool> {
+    trash::delete_all(paths).map_err(io::Error::other)?;
+    #[cfg(any(
+        windows,
+        all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        )
+    ))]
+    {
+        let trashed = trash::os_limited::list().map_err(io::Error::other)?;
+        Ok(paths.iter().all(|path| {
+            trashed
+                .iter()
+                .any(|item| same_path(&item.original_path(), path))
+        }))
+    }
+    #[cfg(not(any(
+        windows,
+        all(
+            unix,
+            not(target_os = "macos"),
+            not(target_os = "ios"),
+            not(target_os = "android")
+        )
+    )))]
+    {
+        Ok(true)
+    }
+}
+
+/// Path equality as the file system sees it: case-insensitive on Windows.
+fn same_path(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+    } else {
+        a == b
+    }
 }
 
 /// Puts back items that were moved to the Recycle Bin from `paths` (the
@@ -103,7 +146,7 @@ pub fn restore_from_trash(paths: &[PathBuf]) -> io::Result<()> {
         for path in paths {
             let item = trashed
                 .iter()
-                .filter(|item| item.original_path() == *path)
+                .filter(|item| same_path(&item.original_path(), path))
                 .max_by_key(|item| item.time_deleted)
                 .ok_or_else(|| {
                     io::Error::new(
@@ -240,8 +283,15 @@ mod tests {
             .join(format!("lumo-trash-test-{}.txt", std::process::id()));
         std::fs::write(&file, "keep me").unwrap();
 
-        move_to_trash(std::slice::from_ref(&file)).unwrap();
+        let recoverable = move_to_trash(std::slice::from_ref(&file)).unwrap();
         assert!(!file.exists());
+        if !recoverable {
+            // CI runners run as service accounts without a Recycle Bin:
+            // Windows deletes permanently and we must report that, which
+            // is what `recoverable == false` checks.
+            eprintln!("no Recycle Bin for this account; restore not exercised");
+            return;
+        }
 
         restore_from_trash(std::slice::from_ref(&file)).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");

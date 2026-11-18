@@ -25,6 +25,7 @@ eframe = { workspace = true, features = [
     "x11",
 ] }
 egui_extras.workspace = true
+notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

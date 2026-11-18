@@ -310,3 +310,52 @@ fn enter_on_a_multi_selection_of_folders_opens_the_focused_one() {
     settle(&mut h);
     assert_eq!(active_path(&h), dir.path().join("one"));
 }
+
+/// Steps the UI (in real time, so the folder watcher can fire) until `done`.
+fn wait_until(
+    h: &mut egui_kittest::Harness<'_, lumo_ui::LumoApp>,
+    what: &str,
+    done: impl Fn(&egui_kittest::Harness<'_, lumo_ui::LumoApp>) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !done(h) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        h.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn changes_made_outside_lumo_show_up_and_keep_the_selection() {
+    let root = tree(&["here/", "elsewhere/"]);
+    let here = root.path().join("here");
+    for name in ["cut-me.txt", "keep.txt"] {
+        fs::write(here.join(name), "x").unwrap();
+    }
+    let mut h = harness(at(&here));
+    settle(&mut h);
+
+    // Cut in Lumo…
+    h.get_by_label("cut-me.txt").click();
+    h.run();
+    h.key_press_modifiers(CTRL, Key::X);
+    h.run();
+    h.get_by_label("keep.txt").click();
+    h.run();
+
+    // …then another app (Explorer) pastes it elsewhere and adds a file.
+    fs::rename(
+        here.join("cut-me.txt"),
+        root.path().join("elsewhere").join("cut-me.txt"),
+    )
+    .unwrap();
+    fs::write(here.join("downloaded.zip"), "x").unwrap();
+
+    wait_until(&mut h, "the folder to update", |h| {
+        common::visible_names(h) == ["downloaded.zip", "keep.txt"]
+    });
+    assert_eq!(selected(&h), ["keep.txt"], "selection survives the reload");
+}

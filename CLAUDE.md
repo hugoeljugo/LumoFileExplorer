@@ -119,6 +119,8 @@ pub trait FileSystemProvider: Send + Sync {
 - **Shortcut matching is loose** (egui accepts extra Shift/Alt), so always check the more specific combination first: Ctrl+Shift+N before Ctrl+N, Shift+Delete before Delete. A missed ordering once made Ctrl+Shift+N open a new window.
 - **Clipboard keys are ours on Windows**: eframe's clipboard shortcuts are off (egui-winit drops Ctrl+V when the clipboard holds files); `LumoApp::raw_input_hook` hands Ctrl+C/X/V back to text fields. Keep both sides working when touching input.
 - **Tests must run `isolated: true`** — private clipboard and Recycle Bin. Never let a test write to the user's clipboard or bin.
+- **Refresh with `Tab::refresh` / `refresh_selecting`**: they reload in the background and swap in (no flicker, selection kept by name). Open tabs are watched (`watch.rs`), so external changes refresh automatically.
+- **Never promise an Undo you can't keep**: `move_to_trash` reports whether items really reached the Recycle Bin.
 - **File operations never overwrite and are undoable**; anything slow runs as a `jobs::Job`. Undo of a create/copy goes to the Recycle Bin, not `remove_file`.
 - **UI tests use egui_kittest** (`crates/lumo-ui/tests/`). Simulate Ctrl as `common::CTRL` (ctrl + command), like winit does on Windows; plain `Modifiers::CTRL` misses text-edit shortcuts such as Ctrl+A.
 - **Anything slow runs off the UI thread** (folder loading uses a worker + bounded channel). Known exception: address-bar autocompletion lists one folder synchronously.

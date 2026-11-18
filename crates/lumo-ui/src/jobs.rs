@@ -26,6 +26,8 @@ pub enum JobOutcome {
     },
     Trashed {
         paths: Vec<PathBuf>,
+        /// `false` if the system deleted them permanently instead.
+        recoverable: bool,
     },
     Restored {
         paths: Vec<PathBuf>,
@@ -159,8 +161,8 @@ pub fn trash(paths: Vec<PathBuf>, bin: TrashBin, repaint: impl Fn() + Send + 'st
         label,
         repaint,
         Box::new(move |_| {
-            bin.trash(&paths).map_err(|e| e.to_string())?;
-            Ok(JobOutcome::Trashed { paths })
+            let recoverable = bin.trash(&paths).map_err(|e| e.to_string())?;
+            Ok(JobOutcome::Trashed { paths, recoverable })
         }),
     )
 }

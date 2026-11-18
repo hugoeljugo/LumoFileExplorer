@@ -119,7 +119,8 @@ impl TrashBin {
         })
     }
 
-    pub(crate) fn trash(&self, paths: &[PathBuf]) -> std::io::Result<()> {
+    /// Returns whether the items can be restored (see `lumo_platform::move_to_trash`).
+    pub(crate) fn trash(&self, paths: &[PathBuf]) -> std::io::Result<bool> {
         match self {
             Self::System => lumo_platform::move_to_trash(paths),
             Self::Folder { dir, origins } => {
@@ -129,7 +130,7 @@ impl TrashBin {
                     std::fs::rename(path, &slot)?;
                     origins.insert(path.clone(), slot);
                 }
-                Ok(())
+                Ok(true)
             }
         }
     }
@@ -354,7 +355,7 @@ impl LumoApp {
         if tab.selected_row().is_some_and(|row| row.name == name) {
             self.rename_when_loaded = None;
             self.start_rename();
-        } else if tab.listing().is_some_and(|l| !l.is_loading()) && tab.selected().is_none() {
+        } else if !tab.is_loading() && tab.selected().is_none() {
             self.rename_when_loaded = None;
         }
     }
@@ -531,11 +532,17 @@ impl LumoApp {
                     self.toast(format!("{verb} {}", items(n)), undoable && n > 0);
                 }
             }
-            JobOutcome::Trashed { paths } => {
+            JobOutcome::Trashed { paths, recoverable } => {
                 let folders: Vec<PathBuf> = paths.iter().map(|p| parent_of(p)).collect();
                 self.refresh_folders(&folders, None);
-                if undoable {
-                    let n = paths.len();
+                let n = paths.len();
+                if !recoverable {
+                    // Never offer an Undo that can't work.
+                    self.toast(
+                        format!("Deleted {} permanently (no Recycle Bin here)", items(n)),
+                        false,
+                    );
+                } else if undoable {
                     self.undo.push(UndoEntry::Trashed { paths });
                     self.toast(format!("Moved {} to the Recycle Bin", items(n)), true);
                 } else {

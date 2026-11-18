@@ -29,6 +29,11 @@ pub struct Tab {
     history: History,
     /// `None` until the tab is first shown, so restoring many tabs is cheap.
     listing: Option<Listing>,
+    /// A reload in progress; the current listing stays on screen until it
+    /// finishes, so refreshing never flickers.
+    next_listing: Option<Listing>,
+    /// A reload was asked for; it starts the next time the tab is shown.
+    refresh_requested: bool,
     sort: SortOrder,
     /// Selected rows (indices into the listing's rows, stable across re-sorts).
     selection: BTreeSet<usize>,
@@ -51,6 +56,8 @@ impl Tab {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             history: History::new(path),
             listing: None,
+            next_listing: None,
+            refresh_requested: false,
             sort: SortOrder::default(),
             selection: BTreeSet::new(),
             focus: None,
@@ -132,14 +139,25 @@ impl Tab {
     }
 
     /// Reloads the folder and then selects `names` (e.g. just-pasted items).
+    /// The current listing stays visible until the new one is ready.
     pub fn refresh_selecting(&mut self, names: Vec<String>) {
-        self.listing = None;
-        self.clear_selection();
         self.pending_select = names;
+        if self.listing.is_some() {
+            self.refresh_requested = true;
+        }
+    }
+
+    /// Loading the folder, or reloading it in the background.
+    pub fn is_loading(&self) -> bool {
+        self.refresh_requested
+            || self.next_listing.is_some()
+            || self.listing.as_ref().is_none_or(Listing::is_loading)
     }
 
     fn moved_from(&mut self, from: &Path) {
         self.listing = None;
+        self.next_listing = None;
+        self.refresh_requested = false;
         self.clear_selection();
         self.scroll_offset = 0.0;
         // Like Explorer: after going up, highlight the folder we came from.
@@ -151,17 +169,35 @@ impl Tab {
             .collect();
     }
 
-    /// Starts loading if this tab has no listing yet.
-    pub fn ensure_loaded(&mut self, repaint: impl Fn() + Send + 'static) {
+    /// Starts loading if this tab has no listing yet, or a requested reload.
+    pub fn ensure_loaded(&mut self, repaint: impl Fn() + Send + Clone + 'static) {
         if self.listing.is_none() {
             self.listing = Some(Listing::load(self.path().to_path_buf(), repaint));
             self.view_stale = true;
+        } else if std::mem::take(&mut self.refresh_requested) {
+            self.next_listing = Some(Listing::load(self.path().to_path_buf(), repaint));
         }
     }
 
-    /// Takes newly loaded rows. Cheap enough to call for every tab each frame.
+    /// Takes newly loaded rows, and swaps in a finished reload. Cheap enough
+    /// to call for every tab each frame.
     pub fn poll(&mut self) -> bool {
-        self.listing.as_mut().is_some_and(Listing::poll)
+        let mut changed = self.listing.as_mut().is_some_and(Listing::poll);
+        if let Some(next) = &mut self.next_listing {
+            changed |= next.poll();
+            if !next.is_loading() {
+                // Row indices refer to the old listing: carry the selection
+                // over by name (unless an operation asked for specific names).
+                if self.pending_select.is_empty() {
+                    self.pending_select = self.selected_names();
+                }
+                self.clear_selection();
+                self.listing = self.next_listing.take();
+                self.view_stale = true;
+                changed = true;
+            }
+        }
+        changed
     }
 
     /// Brings the sorted view and pending selection up to date.
@@ -171,7 +207,8 @@ impl Tab {
         };
         listing.update_view(self.sort, show_hidden, self.view_stale);
         self.view_stale = false;
-        if self.pending_select.is_empty() {
+        // Names to select refer to the reload, not to what is on screen.
+        if self.pending_select.is_empty() || self.refresh_requested || self.next_listing.is_some() {
             return;
         }
         let by_name: HashMap<&str, usize> = listing
@@ -405,7 +442,8 @@ mod tests {
     fn settle(tab: &mut Tab) {
         tab.ensure_loaded(|| {});
         let deadline = Instant::now() + Duration::from_secs(10);
-        while tab.listing().is_some_and(Listing::is_loading) {
+        while tab.is_loading() {
+            tab.ensure_loaded(|| {});
             assert!(Instant::now() < deadline, "load timed out");
             tab.poll();
             std::thread::sleep(Duration::from_millis(1));

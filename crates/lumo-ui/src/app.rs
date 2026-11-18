@@ -19,6 +19,7 @@ use crate::listing::SortColumn;
 use crate::palette::{CommandPalette, ItemKind, PaletteItem};
 use crate::session::Session;
 use crate::tab::{Move, Tab};
+use crate::watch::{self, FolderWatcher};
 
 pub const APP_ID: &str = "Lumo";
 
@@ -170,6 +171,8 @@ pub struct LumoApp {
     pub(crate) properties: Option<Properties>,
     /// Screen rect of the file list (for placing the tray, toasts and menus).
     pub(crate) table_rect: Option<Rect>,
+    /// Live updates for folders open in tabs.
+    watcher: FolderWatcher,
     pub(crate) ctx: Context,
 }
 
@@ -248,6 +251,10 @@ impl LumoApp {
             confirm_delete: None,
             properties: None,
             table_rect: None,
+            watcher: {
+                let ctx = cc.egui_ctx.clone();
+                FolderWatcher::new(move || ctx.request_repaint())
+            },
             ctx: cc.egui_ctx.clone(),
         }
     }
@@ -300,9 +307,7 @@ impl LumoApp {
 
     /// True once the active tab has finished loading and no file job runs.
     pub fn is_idle(&self) -> bool {
-        self.jobs.is_empty()
-            && self.rename_when_loaded.is_none()
-            && self.active_tab().listing().is_some_and(|l| !l.is_loading())
+        self.jobs.is_empty() && self.rename_when_loaded.is_none() && !self.active_tab().is_loading()
     }
 
     /// A text field has the keyboard (address bar, palette, rename box).
@@ -322,6 +327,27 @@ impl LumoApp {
     }
 
     // ---- per-frame work ----
+
+    /// Keeps the watcher on the folders open in tabs and reloads any that
+    /// changed outside Lumo.
+    pub(crate) fn apply_folder_changes(&mut self) {
+        self.watcher
+            .sync(self.tabs.iter().map(|t| t.path().to_path_buf()).collect());
+        let (settled, settling) = self.watcher.take_settled();
+        if settling {
+            self.ctx.request_repaint_after(watch::SETTLE);
+        }
+        if settled.is_empty() {
+            return;
+        }
+        for tab in &mut self.tabs {
+            if settled.iter().any(|folder| folder == tab.path()) {
+                tab.refresh();
+            }
+        }
+        // Items cut here may have been pasted (moved away) by another app.
+        self.cut_paths.retain(|path| path.exists());
+    }
 
     /// Starts loading the active tab and folds in rows from every tab's loader.
     pub(crate) fn update_tabs(&mut self) {
@@ -1093,6 +1119,7 @@ impl eframe::App for LumoApp {
         self.apply_actions();
         self.poll_jobs();
         self.expire_toast();
+        self.apply_folder_changes();
         self.update_tabs();
         self.start_pending_rename();
         self.draw(ui);

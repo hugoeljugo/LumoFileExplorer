@@ -183,6 +183,8 @@ Notes:
 - Ctrl+C/X/V: egui-winit only reports a paste when the clipboard holds *text*, so on Windows Lumo turns eframe's clipboard shortcuts off, handles the keys itself for files, and translates them back for text fields (`LumoApp::raw_input_hook`).
 - Paste conflicts currently "keep both"; a replace/skip prompt can come later.
 - Drag and drop between folders/windows isn't part of this phase.
+- **Live folder updates (pulled forward from Phase 6):** open tabs watch their folders (`notify`), so changes made outside Lumo appear without F5 — e.g. files cut in Lumo and pasted in Explorer disappear from Lumo (bug found in manual testing). Reloads happen in the background and swap in, keeping selection and scroll, with no flicker.
+- **Honest Recycle Bin:** after a delete Lumo checks the items really reached the Recycle Bin. Where Windows deletes permanently instead (network shares, some USB drives, bin disabled, service accounts — this is what failed CI), the toast says so and offers no Undo.
 
 ---
 
@@ -282,7 +284,7 @@ lumo search "TODO" --path ./src --type "*.rs"
 - [ ] Git status overlays (modified/untracked/staged indicators)
 - [ ] Diff viewer for selected files
 - [ ] Syntax-highlighted code previews
-- [ ] File watcher hooks (trigger on change)
+- [ ] File watcher hooks (trigger on change) — folder watching for open tabs already landed in Phase 2.6; this item is about user-facing hooks/automation
 
 ### Dependencies
 Phase 5
